@@ -1,3 +1,13 @@
-#include <stdio.h>
+#include "Ascii.hpp"
+#include "Log.hpp"
 
-int main() { printf("ZAAA"); }
+#include <iostream>
+
+int main() {
+    Log::Init();
+
+    std::cout << Ascii::Logo;
+
+    Log::Info("hello from GxBuild3.");
+    return 0;
+}
