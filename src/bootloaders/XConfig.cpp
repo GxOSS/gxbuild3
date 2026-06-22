@@ -1,0 +1,1 @@
+// XConfig / SMC Config Handler
