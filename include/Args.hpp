@@ -68,6 +68,7 @@ struct GxArgs {
     std::optional<std::filesystem::path> fw_dir;
     std::optional<std::filesystem::path> sha_file;
     std::optional<std::filesystem::path> source_nand;
+    std::optional<std::filesystem::path> stfs_package;
     std::optional<std::filesystem::path> ecc;
     std::optional<std::filesystem::path> xboxupd;
     std::optional<std::filesystem::path> output_dir;
@@ -84,5 +85,6 @@ struct GxArgs {
     bool full_image{false};
     bool bigblock{false};
     bool extract_all{false};
+    bool stfs_split_xboxupd{false};
     bool license{false};
 };

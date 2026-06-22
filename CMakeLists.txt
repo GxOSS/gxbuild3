@@ -19,6 +19,7 @@ add_executable(gxbuild3
     src/patchers/BinaryParser.cpp
     src/patchers/Patcher.cpp
     src/patchers/Signature.cpp
+    src/stfs/StfsContainer.cpp
     src/bootloaders/2bl.cpp
     src/bootloaders/Keyvault.cpp
     src/bootloaders/SMC.cpp

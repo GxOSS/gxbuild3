@@ -4,13 +4,16 @@
 #include "bootloaders/2bl.hpp"
 #include "bootloaders/Keyvault.hpp"
 #include "ini/IniParser.hpp"
+#include "stfs/StfsContainer.hpp"
 
 #include <CLI/App.hpp>
 #include <CLI/Config.hpp>
 #include <CLI/Formatter.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <span>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -72,6 +75,18 @@ static std::optional<std::vector<uint8_t>> ReadFile(const std::filesystem::path&
     return std::vector<uint8_t>(std::istreambuf_iterator<char>(f), {});
 }
 
+static std::span<const std::byte> AsByteSpan(const std::vector<uint8_t>& data) {
+    return {reinterpret_cast<const std::byte*>(data.data()), data.size()};
+}
+
+static bool WriteFile(const std::filesystem::path& path, std::span<const std::byte> data) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f)
+        return false;
+    f.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+    return static_cast<bool>(f);
+}
+
 int main(int argc, char** argv) {
     Log::Init();
 
@@ -127,10 +142,16 @@ int main(int argc, char** argv) {
 
     auto* build_sub = app.add_subcommand("build", "Build a NAND image (default)");
     auto* extract_sub = app.add_subcommand("extract", "Extract files from a NAND image");
+    auto* stfs_sub = app.add_subcommand("stfs", "Extract files from a PIRS/STFS package");
 
     build_sub->callback([&args]() { args.mode = "build"; });
     extract_sub->callback([&args]() { args.mode = "extract"; });
     extract_sub->add_flag("--all", args.extract_all, "Extract all files");
+    stfs_sub->callback([&args]() { args.mode = "stfs"; });
+    stfs_sub->add_option("package", args.stfs_package, "PIRS/STFS package")->required();
+    stfs_sub->add_option("-g,--output-dir", args.output_dir, "Output directory");
+    stfs_sub->add_flag("--xboxupd", args.stfs_split_xboxupd,
+                       "Extract xboxupd.bin and split it into cf.bin/cg.bin");
 
     app.require_subcommand(0, 1);
     try {
@@ -191,8 +212,44 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         args.console = ct;
     }
 
-    if (!app.got_subcommand(build_sub) && !app.got_subcommand(extract_sub))
+    if (!app.got_subcommand(build_sub) && !app.got_subcommand(extract_sub) &&
+        !app.got_subcommand(stfs_sub))
         Log::Warn("No subcommand specified, defaulting to 'build'.");
+
+    if (args.mode == "stfs") {
+        const auto package_path = *args.stfs_package;
+        const auto output_dir = args.output_dir.value_or(std::filesystem::current_path());
+
+        auto package_data = ReadFile(package_path);
+        if (!package_data) {
+            Log::Error("Failed to read STFS package: {}", package_path.string());
+            return 1;
+        }
+
+        try {
+            std::filesystem::create_directories(output_dir);
+
+            if (args.stfs_split_xboxupd) {
+                const auto parts = Stfs::extractXboxupdRaw(AsByteSpan(*package_data));
+                if (!WriteFile(output_dir / "cf.bin", parts.cf_raw) ||
+                    !WriteFile(output_dir / "cg.bin", parts.cg_raw)) {
+                    Log::Error("Failed to write xboxupd split output to '{}'", output_dir.string());
+                    return 1;
+                }
+
+                Log::Info("Extracted xboxupd CF/CG to '{}'", output_dir.string());
+            } else {
+                const Stfs::StfsContainer container{AsByteSpan(*package_data)};
+                container.extractAll(output_dir);
+                Log::Info("Extracted STFS package to '{}'", output_dir.string());
+            }
+        } catch (const std::exception& ex) {
+            Log::Error("STFS extraction failed: {}", ex.what());
+            return 1;
+        }
+
+        return 0;
+    }
 
     std::vector<uint8_t> cpu_key_bytes;
     if (args.cpu_key) {
