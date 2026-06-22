@@ -58,7 +58,7 @@ typedef struct _generic_header {
     EXCRYPT_SIG signature;
 } generic_header;
 
-typedef struct _2bl_header {
+typedef struct _bl2_header {
     bl_header header;
     uint8_t key[0x10];
     uint64_t padding_or_args[4];
@@ -70,9 +70,9 @@ typedef struct _2bl_header {
     char sd_salt[10];
     uint8_t cd_cbb_hash[0x14]; // CB_A has CB_B hash, CB_B has CD hash
     uint8_t more_globals[0x10]; // more_globals[1] has LDV
-} 2bl_header;
+} bl2_header;
 
-typedef struct _4bl_header {
+typedef struct _bl4_header {
     bl_header header;
     uint8_t key[0x10];
     EXCRYPT_SIG signature; // only valid on devkits
@@ -80,17 +80,17 @@ typedef struct _4bl_header {
     char cf_salt[10];
     uint16_t unused2;
     uint8_t ce_hash[0x14];
-} 4bl_header;
+} bl4_header;
 
-typedef struct _5bl_header {
+typedef struct _bl5_header {
     bl_header header;
     uint8_t key[0x10];
     uint64_t target_address;
     uint32_t uncompressed_size;
     uint32_t unknown; // think this is unused
-} 5bl_header;
+} bl5_header;
 
-typedef struct _6bl_header {
+typedef struct _bl6_header {
     bl_header header;
     uint16_t base_ver;
     uint16_t base_flags; // unsure, 0x8000 for devkit
@@ -103,7 +103,7 @@ typedef struct _6bl_header {
     EXCRYPT_SIG signature;
     uint8_t cg_hmac[0x10];
     uint8_t cg_hash[0x14];
-} 6bl_header;
+} bl6_header;
 
 typedef struct _7bl_header {
     bl_header header;
@@ -112,4 +112,4 @@ typedef struct _7bl_header {
     uint8_t original_hash[0x14];
     uint32_t new_size;
     uint8_t new_hash[0x14];
-} 7bl_header;
+} bl7_header;

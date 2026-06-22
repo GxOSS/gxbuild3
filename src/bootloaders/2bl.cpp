@@ -12,11 +12,11 @@ BootloaderCb BootloaderCb::parse(const std::vector<uint8_t>& bytes) {
 
     std::memcpy(&cb.header, bytes.data(), sizeof(bl_header));
 
-    cb.header.magic = __builtin_bswap16(cb.header.magic);
-    cb.header.version = __builtin_bswap16(cb.header.version);
-    cb.header.flags = __builtin_bswap16(cb.header.flags);
-    cb.header.size = __builtin_bswap32(cb.header.size);
-    cb.header.entrypoint = __builtin_bswap32(cb.header.entrypoint);
+    cb.header.header.magic = __builtin_bswap16(cb.header.header.magic);
+    cb.header.header.version = __builtin_bswap16(cb.header.header.version);
+    cb.header.header.flags = __builtin_bswap16(cb.header.header.flags);
+    cb.header.header.size = __builtin_bswap32(cb.header.header.size);
+    cb.header.header.entrypoint = __builtin_bswap32(cb.header.header.entrypoint);
 
     cb.data = std::vector<uint8_t>(bytes.begin() + sizeof(bl_header), bytes.end());
     cb.decrypted = cb.verify_decrypted();
@@ -42,7 +42,7 @@ void BootloaderCb::do_rc4_decrypt(const uint8_t key[16], size_t payload_len) {
 }
 
 void BootloaderCb::decrypt(const uint8_t onebl_key[16]) {
-    uint32_t size_aligned = (header.size + 0xF) & ~0xF;
+    uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
     size_t payload_len = size_aligned - sizeof(bl_header);
     uint8_t digest[20];
     std::array<uint8_t, 16> key;
@@ -63,7 +63,7 @@ void BootloaderCb::decrypt(const uint8_t onebl_key[16]) {
 }
 
 void BootloaderCb::decrypt_v1(const uint8_t cb_a_key[16], const uint8_t cpu_key[16]) {
-    uint32_t size_aligned = (header.size + 0xF) & ~0xF;
+    uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
     size_t payload_len = size_aligned - sizeof(bl_header);
     uint8_t digest[20];
     std::array<uint8_t, 16> key;
@@ -83,12 +83,12 @@ void BootloaderCb::decrypt_v1(const uint8_t cb_a_key[16], const uint8_t cpu_key[
         populate_metadata();
 }
 
-void BootloaderCb::decrypt_v2(const bl_header& cb_a_hdr, const uint8_t cb_a_key[16], const uint8_t cpu_key[16]) {
+void BootloaderCb::decrypt_v2(const bl2_header& cb_a_hdr, const uint8_t cb_a_key[16], const uint8_t cpu_key[16]) {
     uint8_t digest[20];
     uint8_t cb_a_hdr_copy[16];
     std::array<uint8_t, 16> key;
 
-    uint32_t size_aligned = (header.size + 0xF) & ~0xF;
+    uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
     size_t payload_len = size_aligned - sizeof(bl_header);
 
     if (data.size() < payload_len)
@@ -114,8 +114,9 @@ void BootloaderCb::decrypt_v2(const bl_header& cb_a_hdr, const uint8_t cb_a_key[
     if (decrypted)
         populate_metadata();
 }
+
 void BootloaderCb::decrypt_mfg(const uint8_t cb_a_key[16]) {
-    uint32_t size_aligned = (header.size + 0xF) & ~0xF;
+    uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
     size_t payload_len = size_aligned - sizeof(bl_header);
     uint8_t hmac_input[0x20];
     uint8_t zero_key[16] = {};
@@ -147,7 +148,7 @@ void BootloaderCb::populate_metadata() {
 
     if (!is_decrypted() || data.size() < 0x3B0) return;
 
-    meta.b_flags = header.flags;
+    meta.b_flags = header.header.flags;
 
     meta.pairing_data[0] = data[0x12];
     meta.pairing_data[1] = data[0x11];
