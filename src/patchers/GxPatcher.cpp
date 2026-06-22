@@ -43,7 +43,8 @@ bool GxXePatch::ApplyPatchEntry(uint8_t* data, uint32_t dataSize, const GxXePatc
     return ApplyPatch(data, dataSize, entry.address, entry.length, entry.words.data());
 }
 
-bool GxXePatch::ApplyPatchSection(uint8_t* data, uint32_t dataSize, const GXePatchSection& section) {
+bool GxXePatch::ApplyPatchSection(uint8_t* data, uint32_t dataSize,
+                                  const GXePatchSection& section) {
     for (const auto& entry : section.entries) {
         if (!ApplyPatchEntry(data, dataSize, entry)) {
             return false;

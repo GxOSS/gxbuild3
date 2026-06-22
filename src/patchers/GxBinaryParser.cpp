@@ -56,7 +56,8 @@ bool GxBinaryParser::ParsePatchFile(const std::string& filePath,
         entry.words.resize(length);
 
         if (length > 0) {
-            if (!file.read(reinterpret_cast<char*>(entry.words.data()), length * sizeof(uint32_t))) {
+            if (!file.read(reinterpret_cast<char*>(entry.words.data()),
+                           length * sizeof(uint32_t))) {
                 // Unexpected EOF
                 return false;
             }

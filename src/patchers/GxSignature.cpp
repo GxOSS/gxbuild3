@@ -30,8 +30,9 @@ std::vector<GxSigByte> GxSignature::ParsePattern(const std::string& patternStr) 
     return pattern;
 }
 
-uint32_t GxSignature::ApplyPatch(uint8_t* data, uint32_t dataSize, const std::string& searchPatternStr,
-                              const std::string& replacePatternStr) {
+uint32_t GxSignature::ApplyPatch(uint8_t* data, uint32_t dataSize,
+                                 const std::string& searchPatternStr,
+                                 const std::string& replacePatternStr) {
     if (!data || dataSize == 0) {
         return 0;
     }
