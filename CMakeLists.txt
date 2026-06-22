@@ -20,6 +20,8 @@ add_executable(gxbuild3
     src/patchers/Patcher.cpp
     src/patchers/Signature.cpp
     src/bootloaders/2bl.cpp
+    src/bootloaders/Keyvault.cpp
+    src/bootloaders/SMC.cpp
 )
 
 target_compile_features(gxbuild3 PRIVATE cxx_std_23)

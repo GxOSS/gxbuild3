@@ -90,17 +90,19 @@ std::vector<uint8_t> keyvault_decrypt(const std::vector<uint8_t>& cpu_key,
     std::vector<uint8_t> out_data = data;
 
     uint8_t kv_hash[20];
-    ExCryptHmacSha(cpu_key.data(), cpu_key.size(), out_data.data(), 0x10, nullptr, 0, nullptr, 0,
-                   kv_hash, 20);
+    ExCryptHmacSha(cpu_key.data(), static_cast<uint32_t>(cpu_key.size()), out_data.data(), 0x10,
+                   nullptr, 0, nullptr, 0, kv_hash, 20);
 
     if (out_data.size() > 0x10) {
-        ExCryptRc4(kv_hash, 16, out_data.data() + 0x10, out_data.size() - 0x10);
+        ExCryptRc4(kv_hash, 16, out_data.data() + 0x10,
+                   static_cast<uint32_t>(out_data.size() - 0x10));
     }
 
     const uint8_t version[2] = {0x07, 0x12};
     uint8_t kv_hash2[20];
-    ExCryptHmacSha(cpu_key.data(), cpu_key.size(), out_data.data() + 0x10, out_data.size() - 0x10,
-                   version, 2, nullptr, 0, kv_hash2, 20);
+    ExCryptHmacSha(cpu_key.data(), static_cast<uint32_t>(cpu_key.size()), out_data.data() + 0x10,
+                   static_cast<uint32_t>(out_data.size() - 0x10), version, 2, nullptr, 0, kv_hash2,
+                   20);
 
     if (std::memcmp(out_data.data(), kv_hash2, 0x10) != 0) {
         throw std::runtime_error("Invalid KV digest");
@@ -125,16 +127,18 @@ std::vector<uint8_t> keyvault_encrypt(const std::vector<uint8_t>& cpu_key,
 
     const uint8_t version[2] = {0x07, 0x12};
     uint8_t kv_hash[20];
-    ExCryptHmacSha(cpu_key.data(), cpu_key.size(), out_data.data() + 0x10, out_data.size() - 0x10,
-                   version, 2, nullptr, 0, kv_hash, 20);
+    ExCryptHmacSha(cpu_key.data(), static_cast<uint32_t>(cpu_key.size()), out_data.data() + 0x10,
+                   static_cast<uint32_t>(out_data.size() - 0x10), version, 2, nullptr, 0, kv_hash,
+                   20);
     std::memcpy(out_data.data(), kv_hash, 16);
 
     uint8_t rc4_key[20];
-    ExCryptHmacSha(cpu_key.data(), cpu_key.size(), out_data.data(), 0x10, nullptr, 0, nullptr, 0,
-                   rc4_key, 20);
+    ExCryptHmacSha(cpu_key.data(), static_cast<uint32_t>(cpu_key.size()), out_data.data(), 0x10,
+                   nullptr, 0, nullptr, 0, rc4_key, 20);
 
     if (out_data.size() > 0x10) {
-        ExCryptRc4(rc4_key, 16, out_data.data() + 0x10, out_data.size() - 0x10);
+        ExCryptRc4(rc4_key, 16, out_data.data() + 0x10,
+                   static_cast<uint32_t>(out_data.size() - 0x10));
     }
 
     return out_data;
@@ -152,8 +156,8 @@ bool keyvault_verify(const std::vector<uint8_t>& cpu_key, const std::vector<uint
     const uint8_t* kv_data = data.data() + 0x18;
 
     uint8_t kv_hash[20];
-    ExCryptHmacSha(cpu_key.data(), cpu_key.size(), kv_data + 4, 0xD4, kv_data + 0xE8, 0x1CF8,
-                   kv_data + 0x1EE0, 0x2108, kv_hash, 20);
+    ExCryptHmacSha(cpu_key.data(), static_cast<uint32_t>(cpu_key.size()), kv_data + 4, 0xD4,
+                   kv_data + 0xE8, 0x1CF8, kv_data + 0x1EE0, 0x2108, kv_hash, 20);
 
     return ExKeysPkcs1Verify(kv_hash, kv_data + 0x1DE0, (EXCRYPT_RSA*) pub_key.data()) != 0;
 }
