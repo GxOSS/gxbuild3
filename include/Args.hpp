@@ -84,4 +84,5 @@ struct GxArgs {
     bool full_image{false};
     bool bigblock{false};
     bool extract_all{false};
+    bool license{false};
 };
