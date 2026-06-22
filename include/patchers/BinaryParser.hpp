@@ -1,22 +1,19 @@
 #pragma once
-
 #include <cstdint>
 #include <string>
 #include <vector>
 
-struct GxXePatchEntry {
+struct XePatchEntry {
     uint32_t address;
     uint32_t length;
-    std::vector<uint32_t> words; // host-endian patch words
+    std::vector<uint32_t> words;
 };
 
-struct GXePatchSection {
+struct XePatchSection {
     std::string identifier;
-    std::vector<GxXePatchEntry> entries;
+    std::vector<XePatchEntry> entries;
 };
 
-class GxBinaryParser {
-  public:
-    static bool ParsePatchFile(const std::string& filePath,
-                               std::vector<std::vector<GxXePatchEntry>>& outSections);
-};
+namespace BinaryParser {
+    bool ParsePatchFile(const std::string& filePath, std::vector<XePatchSection>& outSections);
+}
