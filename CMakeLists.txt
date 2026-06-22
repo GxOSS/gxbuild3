@@ -14,6 +14,7 @@ add_subdirectory(extern/stfs)
 add_executable(gxbuild3
     src/GxBuild3.cpp
     src/Log.cpp
+    src/ini/IniParser.cpp
 )
 
 target_compile_features(gxbuild3 PRIVATE cxx_std_23)
