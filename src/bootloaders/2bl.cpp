@@ -1,8 +1,10 @@
 #include "bootloaders/2bl.hpp"
+
+#include "bootloaders/Common.hpp"
 #include "excrypt.h"
+
 #include <cstring>
 #include <stdexcept>
-#include "bootloaders/Common.hpp"
 
 BootloaderCb BootloaderCb::parse(const std::vector<uint8_t>& bytes) {
     BootloaderCb cb;
@@ -20,15 +22,18 @@ BootloaderCb BootloaderCb::parse(const std::vector<uint8_t>& bytes) {
 
     cb.data = std::vector<uint8_t>(bytes.begin() + sizeof(bl_header), bytes.end());
     cb.decrypted = cb.verify_decrypted();
-    if (cb.decrypted) cb.populate_metadata();
+    if (cb.decrypted)
+        cb.populate_metadata();
     return cb;
 }
 
 bool BootloaderCb::verify_decrypted() const {
-    if (data.size() < 0x380) return false;
+    if (data.size() < 0x380)
+        return false;
 
     for (size_t i = 0x260; i < 0x380; i++)
-        if (data[i] != 0) return false;
+        if (data[i] != 0)
+            return false;
 
     return true;
 }
@@ -83,7 +88,8 @@ void BootloaderCb::decrypt_v1(const uint8_t cb_a_key[16], const uint8_t cpu_key[
         populate_metadata();
 }
 
-void BootloaderCb::decrypt_v2(const bl2_header& cb_a_hdr, const uint8_t cb_a_key[16], const uint8_t cpu_key[16]) {
+void BootloaderCb::decrypt_v2(const bl2_header& cb_a_hdr, const uint8_t cb_a_key[16],
+                              const uint8_t cpu_key[16]) {
     uint8_t digest[20];
     uint8_t cb_a_hdr_copy[16];
     std::array<uint8_t, 16> key;
@@ -128,7 +134,6 @@ void BootloaderCb::decrypt_mfg(const uint8_t cb_a_key[16]) {
     std::memcpy(hmac_input, data.data(), 0x10);
     std::memcpy(hmac_input + 0x10, cb_a_key, 0x10);
 
-
     ExCryptHmacSha(zero_key, 16, hmac_input, 0x20, nullptr, 0, nullptr, 0, digest, 20);
 
     std::array<uint8_t, 16> key;
@@ -146,7 +151,8 @@ void BootloaderCb::populate_metadata() {
     uint8_t ldv = data[0x13];
     uint64_t tmp = 0;
 
-    if (!is_decrypted() || data.size() < 0x3B0) return;
+    if (!is_decrypted() || data.size() < 0x3B0)
+        return;
 
     meta.b_flags = header.header.flags;
 

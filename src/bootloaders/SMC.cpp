@@ -3,12 +3,8 @@
 const uint8_t XECRYPT_SMC_KEY[4] = {0x42, 0x75, 0x4E, 0x79};
 
 std::vector<uint8_t> decrypt_smc(const std::vector<uint8_t>& data) {
-    uint32_t key[4] = {
-        XECRYPT_SMC_KEY[0],
-        XECRYPT_SMC_KEY[1],
-        XECRYPT_SMC_KEY[2],
-        XECRYPT_SMC_KEY[3]
-    };
+    uint32_t key[4] = {XECRYPT_SMC_KEY[0], XECRYPT_SMC_KEY[1], XECRYPT_SMC_KEY[2],
+                       XECRYPT_SMC_KEY[3]};
     std::vector<uint8_t> decrypted;
     decrypted.reserve(data.size());
 
@@ -24,12 +20,8 @@ std::vector<uint8_t> decrypt_smc(const std::vector<uint8_t>& data) {
 }
 
 std::vector<uint8_t> encrypt_smc(const std::vector<uint8_t>& data) {
-    uint32_t key[4] = {
-        XECRYPT_SMC_KEY[0],
-        XECRYPT_SMC_KEY[1],
-        XECRYPT_SMC_KEY[2],
-        XECRYPT_SMC_KEY[3]
-    };
+    uint32_t key[4] = {XECRYPT_SMC_KEY[0], XECRYPT_SMC_KEY[1], XECRYPT_SMC_KEY[2],
+                       XECRYPT_SMC_KEY[3]};
     std::vector<uint8_t> encrypted;
     encrypted.reserve(data.size());
 
@@ -42,4 +34,4 @@ std::vector<uint8_t> encrypt_smc(const std::vector<uint8_t>& data) {
     }
 
     return encrypted;
-}
+}   

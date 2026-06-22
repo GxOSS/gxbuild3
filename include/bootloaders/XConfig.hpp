@@ -19,7 +19,7 @@ typedef enum _xconfig_category {
 } xconfig_category;
 
 typedef struct _fan_override {
-    unsigned char Speed  : 7;
+    unsigned char Speed : 7;
     unsigned char Enable : 1;
 } fan_override_t;
 
