@@ -46,8 +46,6 @@ inline const std::map<std::string, ConsoleType> kConsoleTypeMap = {
     {"zephyr", ConsoleType::Zephyr},
     {"falcon", ConsoleType::Falcon},
     {"jasper", ConsoleType::Jasper},
-    {"jasper256", ConsoleType::Jasper256},
-    {"jasper512", ConsoleType::Jasper512},
     {"jasperbb", ConsoleType::JasperBB},
     {"jasperbigffs", ConsoleType::JasperBigFFS},
     {"trinity", ConsoleType::Trinity},
