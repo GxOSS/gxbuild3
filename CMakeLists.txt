@@ -7,6 +7,7 @@ endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+add_subdirectory(extern/CLI11)
 add_subdirectory(extern/GxCrypt)
 add_subdirectory(extern/spdlog)
 add_subdirectory(extern/stfs)
@@ -29,6 +30,7 @@ target_include_directories(gxbuild3 PRIVATE
 )
 
 target_link_libraries(gxbuild3 PRIVATE
+    CLI11::CLI11
     GxCrypt
     spdlog::spdlog
     stfs
