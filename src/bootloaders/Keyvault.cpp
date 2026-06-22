@@ -150,7 +150,7 @@ std::vector<uint8_t> keyvault_encrypt(const std::vector<uint8_t>& cpu_key, const
     return out_data;
 }
 
-bool XeCryptKeyVaultVerify(const std::vector<uint8_t>& cpu_key, const std::vector<uint8_t>& data, const std::vector<uint8_t>& pub_key) {
+bool keyvault_verify(const std::vector<uint8_t>& cpu_key, const std::vector<uint8_t>& data, const std::vector<uint8_t>& pub_key) {
     if (!cpukey_valid(cpu_key)) {
         return false;
     }
