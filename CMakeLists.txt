@@ -43,7 +43,7 @@ target_link_libraries(gxbuild3 PRIVATE
 )
 
 if(MSVC)
-    target_compile_options(gxbuild3 PRIVATE /W4 /WX /permissive-)
+    target_compile_options(gxbuild3 PRIVATE /W4 /WX /permissive- /utf-8)
 else()
     target_compile_options(gxbuild3 PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
