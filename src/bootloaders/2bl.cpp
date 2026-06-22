@@ -2,14 +2,15 @@
 #include "excrypt.h"
 #include <cstring>
 #include <stdexcept>
+#include "bootloaders/Common.hpp"
 
 BootloaderCb BootloaderCb::parse(const std::vector<uint8_t>& bytes) {
     BootloaderCb cb;
 
-    if (bytes.size() < sizeof(BootloaderHeader))
+    if (bytes.size() < sizeof(bl_header))
         throw std::runtime_error("CB data too short");
 
-    std::memcpy(&cb.header, bytes.data(), sizeof(BootloaderHeader));
+    std::memcpy(&cb.header, bytes.data(), sizeof(bl_header));
 
     cb.header.magic = __builtin_bswap16(cb.header.magic);
     cb.header.version = __builtin_bswap16(cb.header.version);
@@ -17,7 +18,7 @@ BootloaderCb BootloaderCb::parse(const std::vector<uint8_t>& bytes) {
     cb.header.size = __builtin_bswap32(cb.header.size);
     cb.header.entrypoint = __builtin_bswap32(cb.header.entrypoint);
 
-    cb.data = std::vector<uint8_t>(bytes.begin() + sizeof(BootloaderHeader), bytes.end());
+    cb.data = std::vector<uint8_t>(bytes.begin() + sizeof(bl_header), bytes.end());
     cb.decrypted = cb.verify_decrypted();
     if (cb.decrypted) cb.populate_metadata();
     return cb;
@@ -42,7 +43,7 @@ void BootloaderCb::do_rc4_decrypt(const uint8_t key[16], size_t payload_len) {
 
 void BootloaderCb::decrypt(const uint8_t onebl_key[16]) {
     uint32_t size_aligned = (header.size + 0xF) & ~0xF;
-    size_t payload_len = size_aligned - sizeof(BootloaderHeader);
+    size_t payload_len = size_aligned - sizeof(bl_header);
     uint8_t digest[20];
     std::array<uint8_t, 16> key;
 
@@ -63,7 +64,7 @@ void BootloaderCb::decrypt(const uint8_t onebl_key[16]) {
 
 void BootloaderCb::decrypt_v1(const uint8_t cb_a_key[16], const uint8_t cpu_key[16]) {
     uint32_t size_aligned = (header.size + 0xF) & ~0xF;
-    size_t payload_len = size_aligned - sizeof(BootloaderHeader);
+    size_t payload_len = size_aligned - sizeof(bl_header);
     uint8_t digest[20];
     std::array<uint8_t, 16> key;
 
@@ -82,13 +83,13 @@ void BootloaderCb::decrypt_v1(const uint8_t cb_a_key[16], const uint8_t cpu_key[
         populate_metadata();
 }
 
-void BootloaderCb::decrypt_v2(const BootloaderHeader& cb_a_hdr, const uint8_t cb_a_key[16], const uint8_t cpu_key[16]) {
+void BootloaderCb::decrypt_v2(const bl_header& cb_a_hdr, const uint8_t cb_a_key[16], const uint8_t cpu_key[16]) {
     uint8_t digest[20];
     uint8_t cb_a_hdr_copy[16];
     std::array<uint8_t, 16> key;
 
     uint32_t size_aligned = (header.size + 0xF) & ~0xF;
-    size_t payload_len = size_aligned - sizeof(BootloaderHeader);
+    size_t payload_len = size_aligned - sizeof(bl_header);
 
     if (data.size() < payload_len)
         throw std::runtime_error("CB data too short");
@@ -115,7 +116,7 @@ void BootloaderCb::decrypt_v2(const BootloaderHeader& cb_a_hdr, const uint8_t cb
 }
 void BootloaderCb::decrypt_mfg(const uint8_t cb_a_key[16]) {
     uint32_t size_aligned = (header.size + 0xF) & ~0xF;
-    size_t payload_len = size_aligned - sizeof(BootloaderHeader);
+    size_t payload_len = size_aligned - sizeof(bl_header);
     uint8_t hmac_input[0x20];
     uint8_t zero_key[16] = {};
     uint8_t digest[20];
@@ -178,8 +179,8 @@ void BootloaderCb::populate_metadata() {
 }
 
 std::vector<uint8_t> BootloaderCb::serialize() const {
-    std::vector<uint8_t> out(sizeof(BootloaderHeader));
-    std::memcpy(out.data(), &header, sizeof(BootloaderHeader));
+    std::vector<uint8_t> out(sizeof(bl_header));
+    std::memcpy(out.data(), &header, sizeof(bl_header));
     out.insert(out.end(), data.begin(), data.end());
     return out;
 }

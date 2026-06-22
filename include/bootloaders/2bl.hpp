@@ -3,15 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
-
-struct BootloaderHeader {
-    uint16_t magic;
-    uint16_t version;
-    uint16_t pairing;
-    uint16_t flags;
-    uint32_t entrypoint;
-    uint32_t size;
-} __attribute__((packed));
+#include "Common.hpp"
 
 struct CbMetadata {
     uint16_t b_flags;
@@ -33,7 +25,7 @@ struct CbMetadata {
 
 class BootloaderCb {
 public:
-    BootloaderHeader header;
+    2bl_header header;
     std::vector<uint8_t> data;
     std::optional<CbMetadata> metadata;
     std::optional<std::array<uint8_t, 16>> derived_key;
@@ -43,7 +35,7 @@ public:
 
     void decrypt(const uint8_t onebl_key[16]);
     void decrypt_v1(const uint8_t cb_a_key[16], const uint8_t cpu_key[16]);
-    void decrypt_v2(const BootloaderHeader& cb_a_hdr, const uint8_t cb_a_key[16], const uint8_t cpu_key[16]);
+    void decrypt_v2(const 2bl_header& cb_a_hdr, const uint8_t cb_a_key[16], const uint8_t cpu_key[16]);
     void decrypt_mfg(const uint8_t cb_a_key[16]);
 
     bool is_decrypted() const;
