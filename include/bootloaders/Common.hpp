@@ -50,6 +50,20 @@ typedef struct _bl_header {
     uint32_t size;
 } bl_header;
 
+typedef struct _nand_header {
+    bl_header header;
+    uint8_t copyright[0x40];
+    uint32_t kv_size;
+    uint32_t cf_offset;
+    uint16_t patch_slots;
+    uint16_t kv_version;
+    uint32_t kv_addr;
+    uint32_t fs_addr;
+    uint32_t smc_config_offset;
+    uint32_t smc_boot_size;
+    uint32_t smc_boot_offset;
+} nand_header_t;
+
 // used by SC/3BL, XKE, etc
 typedef struct _generic_header {
     bl_header header;

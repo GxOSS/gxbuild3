@@ -314,4 +314,18 @@ typedef struct _xconfig_system_settings {
     unsigned int PreviousFlashVersion;
 } xconfig_system_settings_t;
 
+typedef struct _xconfig_master {
+    xconfig_static_settings_t static_settings;
+    xconfig_statistic_settings_t statistic_settings;
+    xconfig_secured_settings_t secured_settings;
+    xconfig_user_settings_t user_settings;
+    xconfig_xnet_machine_account_t xnet_machine_account;
+    xconfig_xnet_parameters_t xnet_parameters;
+    xconfig_media_center_settings_t media_center_settings;
+    xconfig_console_settings_t console_settings;
+    xconfig_dvd_settings_t dvd_settings;
+    xconfig_iptv_settings_t iptv_settings;
+    xconfig_system_settings_t system_settings;
+} xconfig_master_t;
+
 #pragma pack(pop)
