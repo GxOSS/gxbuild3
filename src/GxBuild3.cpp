@@ -1,13 +1,19 @@
 #include "Args.hpp"
 #include "Ascii.hpp"
 #include "Log.hpp"
+#include "bootloaders/2bl.hpp"
+#include "bootloaders/Keyvault.hpp"
+#include "ini/IniParser.hpp"
 
 #include <CLI/App.hpp>
 #include <CLI/Config.hpp>
 #include <CLI/Formatter.hpp>
+#include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #if defined(_MSC_VER)
 constexpr const char* compiler = "MSVC";
@@ -31,6 +37,39 @@ static std::optional<ConsoleType> ParseConsoleType(const std::string& s) {
     if (it == kConsoleTypeMap.end())
         return std::nullopt;
     return it->second;
+}
+
+static std::optional<std::vector<uint8_t>> HexToBytes(const std::string& hex) {
+    if (hex.size() % 2 != 0)
+        return std::nullopt;
+    std::vector<uint8_t> out;
+    out.reserve(hex.size() / 2);
+    for (size_t i = 0; i < hex.size(); i += 2) {
+        auto hi = hex[i];
+        auto lo = hex[i + 1];
+        auto from_hex = [](char c) -> int {
+            if (c >= '0' && c <= '9')
+                return c - '0';
+            if (c >= 'a' && c <= 'f')
+                return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F')
+                return c - 'A' + 10;
+            return -1;
+        };
+        int h = from_hex(hi);
+        int l = from_hex(lo);
+        if (h < 0 || l < 0)
+            return std::nullopt;
+        out.push_back(static_cast<uint8_t>((h << 4) | l));
+    }
+    return out;
+}
+
+static std::optional<std::vector<uint8_t>> ReadFile(const std::filesystem::path& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f)
+        return std::nullopt;
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(f), {});
 }
 
 int main(int argc, char** argv) {
@@ -154,6 +193,176 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
     if (!app.got_subcommand(build_sub) && !app.got_subcommand(extract_sub))
         Log::Warn("No subcommand specified, defaulting to 'build'.");
+
+    std::vector<uint8_t> cpu_key_bytes;
+    if (args.cpu_key) {
+        auto parsed = HexToBytes(*args.cpu_key);
+        if (!parsed || parsed->size() != 16) {
+            Log::Error("Invalid CPU key: must be a 32-character hex string");
+            return 1;
+        }
+        cpu_key_bytes = std::move(*parsed);
+        if (!cpukey_valid(cpu_key_bytes)) {
+            Log::Error("CPU key failed ECC/hamming validation");
+            return 1;
+        }
+        Log::Info("CPU key accepted");
+    }
+
+    std::vector<uint8_t> bl_key_bytes;
+    if (args.bl_key) {
+        auto parsed = HexToBytes(*args.bl_key);
+        if (!parsed || parsed->size() != 16) {
+            Log::Error("Invalid 1BL key: must be a 32-character hex string");
+            return 1;
+        }
+        bl_key_bytes = std::move(*parsed);
+        Log::Info("1BL key accepted");
+    }
+
+    Ini::OptionsIni options{};
+    {
+        std::filesystem::path opts_path =
+            args.data_dir ? (*args.data_dir / "options.ini") : std::filesystem::path("options.ini");
+
+        auto opts_res = Ini::ParseOptionsIniFile(opts_path);
+        if (!opts_res) {
+            std::visit(
+                [](auto&& err) {
+                    using T = std::decay_t<decltype(err)>;
+                    if constexpr (std::is_same_v<T, Ini::ParseError>) {
+                        if (err != Ini::ParseError::FileNotFound)
+                            Log::Warn("options.ini: {}", Ini::ParseErrorString(err));
+                    } else {
+                        Log::Error("options.ini: {}", Ini::OptionsErrorString(err));
+                    }
+                },
+                opts_res.error());
+        } else {
+            options = std::move(*opts_res);
+            Log::Info("Loaded options.ini");
+
+            if (cpu_key_bytes.empty() && !options.keys.cpukey.empty()) {
+                auto parsed = HexToBytes(options.keys.cpukey);
+                if (parsed && parsed->size() == 16 && cpukey_valid(*parsed)) {
+                    cpu_key_bytes = std::move(*parsed);
+                    Log::Info("CPU key loaded from options.ini");
+                }
+            }
+            if (bl_key_bytes.empty() && !options.keys.key_1bl.empty()) {
+                auto parsed = HexToBytes(options.keys.key_1bl);
+                if (parsed && parsed->size() == 16) {
+                    bl_key_bytes = std::move(*parsed);
+                    Log::Info("1BL key loaded from options.ini");
+                }
+            }
+        }
+    }
+
+    std::optional<Ini::Document> build_doc;
+    {
+        std::filesystem::path ini_dir = args.data_dir.value_or(std::filesystem::current_path());
+
+        std::string ini_name;
+        if (args.ini_ext) {
+            ini_name = *args.ini_ext;
+        } else if (args.console) {
+            static const std::map<ConsoleType, std::string> kConsoleIniName = {
+                {ConsoleType::Xenon, "xenon"},
+                {ConsoleType::Zephyr, "zephyr"},
+                {ConsoleType::Falcon, "falcon"},
+                {ConsoleType::Jasper, "jasper"},
+                {ConsoleType::JasperBB, "jasperbb"},
+                {ConsoleType::JasperBigFFS, "jasperbigffs"},
+                {ConsoleType::Trinity, "trinity"},
+                {ConsoleType::TrinityBB, "trinitybb"},
+                {ConsoleType::TrinityBigFFS, "trinitybigffs"},
+                {ConsoleType::Corona, "corona"},
+                {ConsoleType::Corona4G, "corona4g"},
+                {ConsoleType::Winchester, "winchester"},
+                {ConsoleType::Winchester4G, "winchester4g"},
+            };
+            auto it = kConsoleIniName.find(*args.console);
+            if (it != kConsoleIniName.end())
+                ini_name = it->second;
+        }
+
+        if (!ini_name.empty()) {
+            std::filesystem::path ini_path = ini_dir / (ini_name + ".ini");
+            auto res = Ini::ParseFile(ini_path);
+            if (!res) {
+                Log::Error("Failed to load build INI '{}': {}", ini_path.string(),
+                           Ini::ParseErrorString(res.error()));
+                return 1;
+            }
+            build_doc = std::move(*res);
+            Log::Info("Loaded build INI: {}", ini_path.string());
+        } else {
+            Log::Warn("No console type or INI extension specified, skipping build INI load");
+        }
+    }
+
+    if (!bl_key_bytes.empty() && build_doc) {
+        std::filesystem::path fw_dir =
+            args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path()));
+
+        std::string section_name;
+        if (args.console) {
+            static const std::map<ConsoleType, std::string> kConsoleSectionSuffix = {
+                {ConsoleType::Xenon, "xenon"},
+                {ConsoleType::Zephyr, "zephyr"},
+                {ConsoleType::Falcon, "falcon"},
+                {ConsoleType::Jasper, "jasper"},
+                {ConsoleType::JasperBB, "jasperbb"},
+                {ConsoleType::JasperBigFFS, "jasperbigffs"},
+                {ConsoleType::Trinity, "trinity"},
+                {ConsoleType::TrinityBB, "trinitybb"},
+                {ConsoleType::TrinityBigFFS, "trinitybigffs"},
+                {ConsoleType::Corona, "corona"},
+                {ConsoleType::Corona4G, "corona4g"},
+                {ConsoleType::Winchester, "winchester"},
+                {ConsoleType::Winchester4G, "winchester4g"},
+            };
+            auto it = kConsoleSectionSuffix.find(*args.console);
+            if (it != kConsoleSectionSuffix.end())
+                section_name = it->second + "bl";
+        }
+
+        const Ini::Section* main_sec = build_doc->get(section_name);
+        if (main_sec) {
+            for (const auto& entry : *main_sec) {
+                std::string key_lower = entry.key;
+                std::transform(key_lower.begin(), key_lower.end(), key_lower.begin(), ::tolower);
+
+                bool is_cb = key_lower.starts_with("cb") || key_lower.starts_with("sb");
+                if (!is_cb)
+                    continue;
+
+                std::filesystem::path cb_path = fw_dir / entry.key;
+                auto cb_data = ReadFile(cb_path);
+                if (!cb_data) {
+                    Log::Warn("CB file not found: {}", cb_path.string());
+                    continue;
+                }
+
+                try {
+                    auto cb = BootloaderCb::parse(*cb_data);
+                    cb.decrypt(bl_key_bytes.data());
+                    if (cb.is_decrypted()) {
+                        Log::Info("CB '{}' decrypted successfully (v{})", entry.key,
+                                  cb.header.header.version);
+                    } else {
+                        Log::Warn("CB '{}' decrypt completed but verification failed", entry.key);
+                    }
+                } catch (const std::exception& ex) {
+                    Log::Error("CB '{}' parse/decrypt failed: {}", entry.key, ex.what());
+                }
+                break;
+            }
+        } else if (!section_name.empty()) {
+            Log::Warn("Section '{}' not found in build INI", section_name);
+        }
+    }
 
     return 0;
 }
