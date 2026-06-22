@@ -44,3 +44,11 @@ if(MSVC)
 else()
     target_compile_options(gxbuild3 PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
+
+include(GNUInstallDirs)
+
+install(TARGETS gxbuild3
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
