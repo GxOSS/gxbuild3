@@ -1,9 +1,10 @@
 #pragma once
-#include <vector>
+#include "Common.hpp"
+
 #include <array>
 #include <cstdint>
 #include <optional>
-#include "Common.hpp"
+#include <vector>
 
 struct CbMetadata {
     uint16_t b_flags;
@@ -24,7 +25,7 @@ struct CbMetadata {
 };
 
 class BootloaderCb {
-public:
+  public:
     bl2_header header;
     std::vector<uint8_t> data;
     std::optional<CbMetadata> metadata;
@@ -35,7 +36,8 @@ public:
 
     void decrypt(const uint8_t onebl_key[16]);
     void decrypt_v1(const uint8_t cb_a_key[16], const uint8_t cpu_key[16]);
-    void decrypt_v2(const bl2_header& cb_a_hdr, const uint8_t cb_a_key[16], const uint8_t cpu_key[16]);
+    void decrypt_v2(const bl2_header& cb_a_hdr, const uint8_t cb_a_key[16],
+                    const uint8_t cpu_key[16]);
     void decrypt_mfg(const uint8_t cb_a_key[16]);
 
     bool is_decrypted() const;
@@ -43,6 +45,6 @@ public:
     void populate_metadata();
     std::vector<uint8_t> serialize() const;
 
-private:
+  private:
     void do_rc4_decrypt(const uint8_t key[16], size_t payload_len);
 };

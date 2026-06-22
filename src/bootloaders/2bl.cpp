@@ -1,5 +1,6 @@
 #include "bootloaders/2bl.hpp"
 
+#include "Endian.hpp"
 #include "bootloaders/Common.hpp"
 #include "excrypt.h"
 
@@ -14,11 +15,11 @@ BootloaderCb BootloaderCb::parse(const std::vector<uint8_t>& bytes) {
 
     std::memcpy(&cb.header, bytes.data(), sizeof(bl_header));
 
-    cb.header.header.magic = __builtin_bswap16(cb.header.header.magic);
-    cb.header.header.version = __builtin_bswap16(cb.header.header.version);
-    cb.header.header.flags = __builtin_bswap16(cb.header.header.flags);
-    cb.header.header.size = __builtin_bswap32(cb.header.header.size);
-    cb.header.header.entrypoint = __builtin_bswap32(cb.header.header.entrypoint);
+    cb.header.header.magic = bswap16(cb.header.header.magic);
+    cb.header.header.version = bswap16(cb.header.header.version);
+    cb.header.header.flags = bswap16(cb.header.header.flags);
+    cb.header.header.size = bswap32(cb.header.header.size);
+    cb.header.header.entrypoint = bswap32(cb.header.header.entrypoint);
 
     cb.data = std::vector<uint8_t>(bytes.begin() + sizeof(bl_header), bytes.end());
     cb.decrypted = cb.verify_decrypted();
@@ -43,7 +44,7 @@ bool BootloaderCb::is_decrypted() const {
 }
 
 void BootloaderCb::do_rc4_decrypt(const uint8_t key[16], size_t payload_len) {
-    ExCryptRc4(key, 16, data.data() + 0x10, payload_len - 0x10);
+    ExCryptRc4(key, 16, data.data() + 0x10, static_cast<uint32_t>(payload_len - 0x10));
 }
 
 void BootloaderCb::decrypt(const uint8_t onebl_key[16]) {
@@ -167,13 +168,13 @@ void BootloaderCb::populate_metadata() {
     std::memcpy(meta.signature, &data[0x30], 0x100);
 
     std::memcpy(&tmp, &data[0x240], 8);
-    meta.post_output_addr = __builtin_bswap64(tmp);
+    meta.post_output_addr = bswap64(tmp);
 
     std::memcpy(&tmp, &data[0x248], 8);
-    meta.sb_flash_addr = __builtin_bswap64(tmp);
+    meta.sb_flash_addr = bswap64(tmp);
 
     std::memcpy(&tmp, &data[0x250], 8);
-    meta.soc_mmio_addr = __builtin_bswap64(tmp);
+    meta.soc_mmio_addr = bswap64(tmp);
 
     std::memcpy(meta.rsa_pub_key, &data[0x258], 0x110);
     std::memcpy(meta.nonce_3bl, &data[0x368], 0x10);

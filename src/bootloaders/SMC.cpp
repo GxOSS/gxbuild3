@@ -34,4 +34,4 @@ std::vector<uint8_t> encrypt_smc(const std::vector<uint8_t>& data) {
     }
 
     return encrypted;
-}   
+}
