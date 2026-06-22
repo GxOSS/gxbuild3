@@ -1,4 +1,4 @@
-#include "patchers/GxPatcher.hpp"
+#include "patchers/Patcher.hpp"
 
 #include <cstdint>
 #include <cstring>

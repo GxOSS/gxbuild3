@@ -1,6 +1,6 @@
 #pragma once
 
-#include "GxBinaryParser.hpp"
+#include "BinaryParser.hpp"
 
 #include <cstdint>
 

@@ -16,6 +16,9 @@ add_executable(gxbuild3
     src/GxBuild3.cpp
     src/Log.cpp
     src/ini/IniParser.cpp
+    src/patchers/BinaryParser.cpp
+    src/patchers/Patcher.cpp
+    src/patchers/Signature.cpp
 )
 
 target_compile_features(gxbuild3 PRIVATE cxx_std_23)

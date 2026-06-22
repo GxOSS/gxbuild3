@@ -1,4 +1,4 @@
-#include "patchers/GxSignature.hpp"
+#include "patchers/Signature.hpp"
 
 #include <algorithm>
 #include <cstdint>

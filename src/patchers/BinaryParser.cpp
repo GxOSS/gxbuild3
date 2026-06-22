@@ -1,4 +1,4 @@
-#include "patchers/GxBinaryParser.hpp"
+#include "patchers/BinaryParser.hpp"
 
 #include <algorithm>
 #include <cstdint>
