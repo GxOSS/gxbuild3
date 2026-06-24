@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <expected>
+#include <span>
+#include <string_view>
 
 #pragma pack(push, 1)
 
@@ -15,7 +18,7 @@ typedef enum _xconfig_category {
     XCONFIG_CONSOLE_CATEGORY = 0x7,
     XCONFIG_DVD_CATEGORY = 0x8,
     XCONFIG_IPTV_CATEGORY = 0x9,
-    XCONFIG_SYSTEM_CATEGORY = 0xA
+    XCONFIG_SYSTEM_CATEGORY = 0xA,
 } xconfig_category;
 
 typedef struct _fan_override {
@@ -150,11 +153,11 @@ typedef struct _xconfig_power_mode {
 } xconfig_power_mode_t;
 
 typedef struct _xconfig_power_vcs_control {
-    unsigned short Configured : 1;
-    unsigned short Reserved : 3;
-    unsigned short Full : 4;
-    unsigned short Quiet : 4;
     unsigned short Fuse : 4;
+    unsigned short Quiet : 4;
+    unsigned short Full : 4;
+    unsigned short Reserved : 3;
+    unsigned short Configured : 1;
 } xconfig_power_vcs_control_t;
 
 typedef struct _xconfig_secured_settings {
@@ -314,4 +317,32 @@ typedef struct _xconfig_system_settings {
     unsigned int PreviousFlashVersion;
 } xconfig_system_settings_t;
 
+typedef struct _xconfig_master {
+    xconfig_static_settings_t Static;
+    xconfig_statistic_settings_t Statistic;
+    xconfig_secured_settings_t Secured;
+    xconfig_user_settings_t User;
+    xconfig_xnet_machine_account_t XnetMachineAccount;
+    xconfig_xnet_parameters_t XnetParameters;
+    xconfig_media_center_settings_t MediaCenter;
+    xconfig_console_settings_t Console;
+    xconfig_dvd_settings_t Dvd;
+    xconfig_iptv_settings_t Iptv;
+    xconfig_system_settings_t System;
+} xconfig_master_t;
+
 #pragma pack(pop)
+
+namespace XConfig {
+
+    enum class ParseError {
+        NullBuffer,
+        BufferTooSmall,
+    };
+
+    [[nodiscard]] std::string_view ParseErrorString(ParseError e) noexcept;
+
+    [[nodiscard]] std::expected<xconfig_master_t, ParseError>
+    Parse(std::span<const uint8_t> buf, size_t base_offset = 0xC000) noexcept;
+
+} // namespace XConfig

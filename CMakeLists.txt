@@ -23,6 +23,7 @@ add_executable(gxbuild3
     src/bootloaders/2bl.cpp
     src/bootloaders/Keyvault.cpp
     src/bootloaders/SMC.cpp
+    src/bootloaders/XConfig.cpp
 )
 
 target_compile_features(gxbuild3 PRIVATE cxx_std_23)
