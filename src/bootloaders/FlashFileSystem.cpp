@@ -1,7 +1,7 @@
 // FlashFileSystem implementation
 // Modern C++23 implementation of Xbox 360 NAND flash filesystem
 
-#include "Endian.hpp"
+#include "Utils.hpp"
 #include "bootloaders/FlashFileSystem.hpp"
 #include "utils/FlashBlockDriver.hpp"
 

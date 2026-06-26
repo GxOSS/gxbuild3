@@ -1,9 +1,8 @@
 // FlashBlockDriver implementation
 // Modern C++23 implementation of Xbox 360 NAND flash block driver
 
-#include "Endian.hpp"
+#include "Utils.hpp"
 #include "utils/FlashBlockDriver.hpp"
-#include "utils/FileManager.hpp"
 
 #include <algorithm>
 #include <cstring>

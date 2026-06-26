@@ -1,6 +1,6 @@
 #include "patchers/BinaryParser.hpp"
 
-#include "Endian.hpp"
+#include "Utils.hpp"
 
 #include <algorithm>
 #include <cstdint>
