@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Endian.hpp"
+#include "Utils.hpp"
 #include "utils/FlashBlockDriver.hpp"
 
 #include <cstdint>

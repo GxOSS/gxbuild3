@@ -1,6 +1,6 @@
 #include "patchers/Patcher.hpp"
 
-#include "Endian.hpp"
+#include "Utils.hpp"
 
 #include <cstdint>
 #include <cstring>
