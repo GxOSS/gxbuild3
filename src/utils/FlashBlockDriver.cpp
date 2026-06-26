@@ -246,7 +246,7 @@ std::optional<std::vector<uint8_t>> FlashBlockDriver::read_lil_block_chain(const
 
     for (size_t i = 0; i < block_count && total_read < size; i++) {
         const uint32_t curr_block = chain[i] + m_fs_offset;
-        const size_t read_size = std::min(size - total_read, m_lil_block_length);
+        const size_t read_size = std::min(size - total_read, static_cast<size_t>(m_lil_block_length));
         
         auto data = read_lil_block(curr_block, read_size);
         if (!data) {

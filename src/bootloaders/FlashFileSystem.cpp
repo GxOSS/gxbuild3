@@ -78,7 +78,7 @@ ChainAllocationResult FlashFileSystem::allocate_blocks(uint16_t blocks_needed, u
     return {false, 0};
 }
 
-std::optional<std::vector<uint16_t>> FlashFileSystem::get_chain_from_start(uint16_t start_block, size_t& chain_length) {
+std::optional<std::vector<uint16_t>> FlashFileSystem::get_chain_from_start(uint16_t start_block, size_t& chain_length) const {
     uint16_t start_blk = 0;
     uint16_t curr_blk = start_block;
 
@@ -119,11 +119,11 @@ void FlashFileSystem::free_chain(uint16_t start_block) {
     }
 }
 
-std::optional<std::vector<uint16_t>> FlashFileSystem::get_chain(uint16_t start_block, size_t& chain_length) {
+std::optional<std::vector<uint16_t>> FlashFileSystem::get_chain(uint16_t start_block, size_t& chain_length) const {
     return get_chain(start_block, 0x600, chain_length); // Default limit
 }
 
-std::optional<std::vector<uint16_t>> FlashFileSystem::get_chain(uint16_t start_block, size_t max_length, size_t& chain_length) {
+std::optional<std::vector<uint16_t>> FlashFileSystem::get_chain(uint16_t start_block, size_t max_length, size_t& chain_length) const {
     // First, get the length of this chain
     int num = 1;
     uint16_t block = start_block;
@@ -441,7 +441,6 @@ bool FlashFileSystem::load(uint16_t block_idx) {
         const uint8_t* fs_data = block_data->data() + (page_idx * 0x200);
 
         for (size_t y = 0; y < kMaxEntriesPerPage; y++) {
-            const size_t entry_idx = new_entries.size();
             new_entries.emplace_back();
 
             const uint8_t* src = fs_data + (y * sizeof(FlashFileSystemEntry));

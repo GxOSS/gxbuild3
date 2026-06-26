@@ -82,8 +82,8 @@ bool write_file(const fs::path& path, const std::vector<uint8_t>& data) {
 
 bool write_file(const fs::path& path, const uint8_t* data, size_t length) {
     // Create parent directories if they don't exist
-    if (path.has_parent_path() && !directory_exists(path.parent_path())) {
-        if (!create_directory(path.parent_path())) {
+    if (path.has_parent_path() && !gxbuild3::utils::directory_exists(path.parent_path())) {
+        if (!gxbuild3::utils::create_directory(path.parent_path())) {
             Log::Error("write_file: failed to create parent directory for: {}", path.string());
             return false;
         }

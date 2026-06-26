@@ -9,6 +9,7 @@
 #include "bootloaders/SMC.hpp"
 #include "bootloaders/Keyvault.hpp"
 #include "bootloaders/Common.hpp"
+#include "bootloaders/FlashFileSystem.hpp"
 
 typedef struct _patchslot_t {
     BootloaderCf cf;
@@ -28,5 +29,10 @@ typedef struct FlashImage {
     std::optional<uint8_t> smc;
     std::optional<xconfig_master_t> xconfig;
     std::optional<CXeKeyVault> keyvault;
+    
+    // Filesystem components
+    std::optional<gxbuild3::bootloaders::FlashFileSystem> filesystem;
+    std::vector<gxbuild3::bootloaders::FlashMobileData> mobile_data;
+    std::optional<gxbuild3::bootloaders::XeCoronaFsData> corona_fs_data;
 } flash_image_t;
 

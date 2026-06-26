@@ -15,9 +15,6 @@
 
 namespace gxbuild3::bootloaders {
 
-// Forward declaration for Corona FS data structure
-struct XeCoronaFsData;
-
 /// @brief Maximum filename length for flash filesystem entries
 inline constexpr size_t kMaxFilenameLength = 0x16;
 
@@ -110,7 +107,7 @@ public:
     /// @param start_block Starting block index
     /// @param chain_length Output parameter for chain length
     /// @return Vector of block indices in the chain, or nullopt on error
-    std::optional<std::vector<uint16_t>> get_chain_from_start(uint16_t start_block, size_t& chain_length);
+    std::optional<std::vector<uint16_t>> get_chain_from_start(uint16_t start_block, size_t& chain_length) const;
 
     /// @brief Get the previous block in a chain
     /// @param block_idx Current block index
@@ -125,14 +122,14 @@ public:
     /// @param start_block Starting block index
     /// @param chain_length Output parameter for chain length
     /// @return Vector of block indices in the chain, or nullopt on error
-    std::optional<std::vector<uint16_t>> get_chain(uint16_t start_block, size_t& chain_length);
+    std::optional<std::vector<uint16_t>> get_chain(uint16_t start_block, size_t& chain_length) const;
 
     /// @brief Get a chain of blocks with a maximum length limit
     /// @param start_block Starting block index
     /// @param max_length Maximum number of blocks to include
     /// @param chain_length Output parameter for actual chain length
     /// @return Vector of block indices in the chain, or nullopt on error
-    std::optional<std::vector<uint16_t>> get_chain(uint16_t start_block, size_t max_length, size_t& chain_length);
+    std::optional<std::vector<uint16_t>> get_chain(uint16_t start_block, size_t max_length, size_t& chain_length) const;
 
     /// @brief Set data for a complete chain of blocks
     /// @param start_block Starting block index
