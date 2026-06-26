@@ -97,19 +97,19 @@ void FlashBlockDriver::set_spare_seq_field(uint8_t* spare_buff, uint32_t sequenc
 }
 
 void FlashBlockDriver::set_spare_index_field(uint8_t* spare_buff, uint16_t blk_index) const {
-    const uint8_t idx0 = static_cast<uint8_t>(blk_index & 0xFF);
-    const uint8_t idx1 = static_cast<uint8_t>((blk_index >> 8) & 0xFF);
+    const uint8_t idx1 = static_cast<uint8_t>(blk_index & 0xFF);
+    const uint8_t idx0 = static_cast<uint8_t>((blk_index >> 8) & 0xFF);
 
     switch (m_spare_type) {
     case SpareType::SmallBlock:
-        spare_buff[0x1] = idx0;
-        spare_buff[0x0] = idx1;
+        spare_buff[0x1] = idx1;
+        spare_buff[0x0] = idx0;
         break;
     case SpareType::BigBlockOnSmall:
     case SpareType::BigBlock:
     case SpareType::Corona4GB:
-        spare_buff[0x2] = idx0;
-        spare_buff[0x1] = idx1;
+        spare_buff[0x2] = idx1;
+        spare_buff[0x1] = idx0;
         break;
     }
 }
@@ -280,7 +280,7 @@ std::optional<std::vector<uint8_t>> FlashBlockDriver::read(size_t offset, size_t
         return std::nullopt;
     }
 
-    const size_t off_in_page = offset % 512;
+    size_t off_in_page = offset % 512;
     const size_t page_in_image = offset / 512;
 
     std::vector<uint8_t> buffer(length);
@@ -300,6 +300,7 @@ std::optional<std::vector<uint8_t>> FlashBlockDriver::read(size_t offset, size_t
         std::memcpy(buffer.data() + buffer_offset, m_image_data.data() + image_offset, bytes_to_read);
         
         bytes_read += bytes_to_read;
+        off_in_page = 0; // reset after first page so subsequent pages start at offset 0
         curr_page++;
     }
 
@@ -373,7 +374,7 @@ bool FlashBlockDriver::write(size_t offset, const uint8_t* buffer, size_t length
         return false;
     }
 
-    const size_t off_in_page = offset % 512;
+    size_t off_in_page = offset % 512;
     const size_t page_in_image = offset / 512;
     size_t bytes_written = 0;
     size_t curr_page = 0;
@@ -390,6 +391,7 @@ bool FlashBlockDriver::write(size_t offset, const uint8_t* buffer, size_t length
 
         std::memcpy(m_image_data.data() + image_offset, copy_from, bytes_to_write);
         bytes_written += bytes_to_write;
+        off_in_page = 0; // reset after first page so subsequent pages start at offset 0
         curr_page++;
     }
 
