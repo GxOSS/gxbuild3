@@ -18,28 +18,6 @@
 
 namespace fs = std::filesystem;
 
-// ============================================================================
-// ASCII Art and Presentation
-// ============================================================================
-
-namespace Ascii {
-    constexpr std::string_view Logo = R"(
-                        .o8                    o8o  oooo        .o8    .oooo.
-                       "888                    `"'  `888       "888  .dP""Y88b
- .oooooooo oooo    ooo  888oooo.  oooo  oooo  oooo   888   .oooo888        ]8P'
-888' `88b   `88b..8P'   d88' `88b `888  `888  `888   888  d88' `888      <88b.
-888   888     Y888'     888   888  888   888   888   888  888   888       `88b.
-`88bod8P'   .o8"'88b    888   888  888   888   888   888  888   888  o.   .88P
-`8oooooo.  o88'   888o  `Y8bod8P'  `V88V"V8P' o888o o888o `Y8bod88P" `8bd88P'
-d"     YD
-"Y88888P'
-)";
-} // namespace Ascii
-
-// ============================================================================
-// Endian Operations
-// ============================================================================
-
 [[nodiscard]] inline uint32_t swap32(uint32_t x) noexcept {
     return (x & 0xFF000000U) >> 24 | (x & 0x00FF0000U) >> 8 | (x & 0x0000FF00U) << 8 |
            (x & 0x000000FFU) << 24;
@@ -66,10 +44,6 @@ d"     YD
     return __builtin_bswap64(x);
 }
 #endif
-
-// ============================================================================
-// CLI Arguments and Types
-// ============================================================================
 
 enum class BuildType {
     Retail,
@@ -156,59 +130,24 @@ struct GxArgs {
     bool license{false};
 };
 
-// ============================================================================
-// File I/O Utilities
-// ============================================================================
+namespace Utils {
 
-namespace gxbuild3::utils {
+    std::vector<uint8_t> hex_string_to_bytes(const std::string& hex_string);
 
-/// @brief Converts a hex string to bytes
-/// @param hex_string Hex string (e.g., "AABBCCDD")
-/// @return Vector of bytes, empty on error
-std::vector<uint8_t> hex_string_to_bytes(const std::string& hex_string);
+    std::optional<std::vector<uint8_t>> read_file(const fs::path& path);
 
-/// @brief Reads entire file contents into a vector
-/// @param path File path
-/// @return File data as vector of bytes, or nullopt on error
-std::optional<std::vector<uint8_t>> read_file(const fs::path& path);
+    std::optional<std::vector<uint8_t>> read_file(const fs::path& path, size_t max_length);
 
-/// @brief Reads file with maximum length limit
-/// @param path File path
-/// @param max_length Maximum bytes to read
-/// @return File data (up to max_length bytes), or nullopt on error
-std::optional<std::vector<uint8_t>> read_file(const fs::path& path, size_t max_length);
+    bool write_file(const fs::path& path, const std::vector<uint8_t>& data);
 
-/// @brief Writes data to a file
-/// @param path File path
-/// @param data Data to write
-/// @return true on success, false on error
-bool write_file(const fs::path& path, const std::vector<uint8_t>& data);
+    bool write_file(const fs::path& path, const uint8_t* data, size_t length);
 
-/// @brief Writes data to a file
-/// @param path File path
-/// @param data Pointer to data
-/// @param length Number of bytes to write
-/// @return true on success, false on error
-bool write_file(const fs::path& path, const uint8_t* data, size_t length);
+    bool directory_exists(const fs::path& path);
 
-/// @brief Checks if a directory exists
-/// @param path Directory path
-/// @return true if directory exists, false otherwise
-bool directory_exists(const fs::path& path);
+    bool create_directory(const fs::path& path);
 
-/// @brief Creates a directory (and parent directories if needed)
-/// @param path Directory path
-/// @return true on success, false on error
-bool create_directory(const fs::path& path);
+    std::optional<std::vector<fs::path>> list_files(const fs::path& path);
 
-/// @brief Lists all files in a directory
-/// @param path Directory path
-/// @return Vector of file paths, or nullopt on error
-std::optional<std::vector<fs::path>> list_files(const fs::path& path);
+    std::optional<std::vector<fs::path>> list_files_recursive(const fs::path& path);
 
-/// @brief Gets all files in a directory recursively
-/// @param path Root directory path
-/// @return Vector of file paths, or nullopt on error
-std::optional<std::vector<fs::path>> list_files_recursive(const fs::path& path);
-
-} // namespace gxbuild3::utils
+} // namespace Utils

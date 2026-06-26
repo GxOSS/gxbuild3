@@ -50,7 +50,6 @@ target_link_libraries(gxbuild3 PRIVATE
     GxCrypt
     spdlog::spdlog
     stfs
-    stdc++fs
 )
 
 if(MSVC)
