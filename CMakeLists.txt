@@ -22,6 +22,12 @@ add_executable(gxbuild3
     src/patchers/Patcher.cpp
     src/patchers/Signature.cpp
     src/bootloaders/2bl.cpp
+    src/bootloaders/3bl.cpp
+    src/bootloaders/4bl.cpp
+    src/bootloaders/5bl.cpp
+    src/bootloaders/6bl.cpp
+    src/bootloaders/7bl.cpp
+    src/bootloaders/FlashFileSystem.cpp
     src/bootloaders/Keyvault.cpp
     src/bootloaders/SMC.cpp
 )

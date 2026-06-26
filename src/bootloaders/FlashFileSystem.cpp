@@ -12,9 +12,9 @@
 
 namespace gxbuild3::bootloaders {
 
-// ============================================================================
+
 // Construction and initialization
-// ============================================================================
+
 
 FlashFileSystem::FlashFileSystem(std::shared_ptr<gxbuild3::utils::FlashBlockDriver> block_driver)
     : m_block_driver(std::move(block_driver)),
@@ -33,9 +33,9 @@ FlashFileSystem::FlashFileSystem(std::shared_ptr<gxbuild3::utils::FlashBlockDriv
     Log::Trace("FlashFileSystem: constructed with block driver and corona data");
 }
 
-// ============================================================================
+
 // Chain management
-// ============================================================================
+
 
 ChainAllocationResult FlashFileSystem::allocate_block() {
     return allocate_blocks(1, 0);
@@ -246,9 +246,9 @@ size_t FlashFileSystem::set_chain_data(uint16_t start_block, std::span<const uin
     return wrote;
 }
 
-// ============================================================================
+
 // File operations
-// ============================================================================
+
 
 const FlashFileSystemEntry* FlashFileSystem::find_file(std::string_view filename) const {
     return find_entry_internal(filename);
@@ -348,9 +348,9 @@ const FlashFileSystemEntry* FlashFileSystem::search_file(std::string_view filena
     return find_file(filename);
 }
 
-// ============================================================================
+
 // Filesystem I/O
-// ============================================================================
+
 
 bool FlashFileSystem::load(uint16_t block_idx) {
     if (!m_block_driver) {
@@ -598,9 +598,9 @@ bool FlashFileSystem::save(uint16_t block_idx) {
     return true;
 }
 
-// ============================================================================
+
 // Internal helpers
-// ============================================================================
+
 
 FlashFileSystemEntry* FlashFileSystem::find_entry_internal(std::string_view filename) {
     for (auto& entry : m_entries) {

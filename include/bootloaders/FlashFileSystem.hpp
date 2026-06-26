@@ -79,9 +79,9 @@ struct ChainAllocationResult {
 /// chain management, file entry management, and filesystem I/O operations.
 class FlashFileSystem {
 public:
-    // ============================================================================
+    
     // Construction and initialization
-    // ============================================================================
+    
 
     /// @brief Default constructor
     explicit FlashFileSystem(std::shared_ptr<gxbuild3::utils::FlashBlockDriver> block_driver);
@@ -92,9 +92,9 @@ public:
     explicit FlashFileSystem(std::shared_ptr<gxbuild3::utils::FlashBlockDriver> block_driver,
                              std::shared_ptr<XeCoronaFsData> corona_data);
 
-    // ============================================================================
+    
     // Chain management
-    // ============================================================================
+    
 
     /// @brief Allocate a single block in the chain
     /// @return ChainAllocationResult with success status and block index
@@ -140,9 +140,9 @@ public:
     /// @return Number of bytes written, or 0 on error
     size_t set_chain_data(uint16_t start_block, std::span<const uint8_t> data);
 
-    // ============================================================================
+    
     // File operations
-    // ============================================================================
+    
 
     /// @brief Search for a file entry by name
     /// @param filename Name of the file to search for
@@ -171,9 +171,9 @@ public:
     /// @return Pointer to the file entry, or nullptr if not found
     const FlashFileSystemEntry* search_file(std::string_view filename) const;
 
-    // ============================================================================
+    
     // Filesystem I/O
-    // ============================================================================
+    
 
     /// @brief Load filesystem from a block
     /// @param block_idx Block index to load from
@@ -185,9 +185,9 @@ public:
     /// @return true on success, false on error
     bool save(uint16_t block_idx);
 
-    // ============================================================================
+    
     // Accessors
-    // ============================================================================
+    
 
     /// @brief Get the block driver
     const std::shared_ptr<gxbuild3::utils::FlashBlockDriver>& block_driver() const { return m_block_driver; }
@@ -211,9 +211,9 @@ public:
     const std::shared_ptr<XeCoronaFsData>& corona_data() const { return m_corona_data; }
 
 private:
-    // ============================================================================
+    
     // Internal state
-    // ============================================================================
+    
 
     std::shared_ptr<gxbuild3::utils::FlashBlockDriver> m_block_driver;
     std::shared_ptr<XeCoronaFsData> m_corona_data;
@@ -222,9 +222,9 @@ private:
     std::vector<uint16_t> m_blockmap;  // Block allocation map
     std::vector<FlashFileSystemEntry> m_entries;  // File entries
 
-    // ============================================================================
+    
     // Internal helpers
-    // ============================================================================
+    
 
     /// @brief Internal method to find an entry by name
     FlashFileSystemEntry* find_entry_internal(std::string_view filename);

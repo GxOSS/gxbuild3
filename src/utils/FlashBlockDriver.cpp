@@ -11,10 +11,6 @@
 
 namespace gxbuild3::utils {
 
-// ============================================================================
-// Constructor and initialization
-// ============================================================================
-
 FlashBlockDriver::FlashBlockDriver() {
     m_fs_offset = 0;
     m_flash_config = 0;
@@ -33,10 +29,6 @@ FlashBlockDriver::FlashBlockDriver(std::vector<uint8_t>&& image_data)
     m_block_length = 0;
     m_page_length = 0;
 }
-
-// ============================================================================
-// Spare data field manipulation
-// ============================================================================
 
 bool FlashBlockDriver::is_mobile_data(uint8_t block_type) const {
     if ((block_type & 0x30) != 0x30)
@@ -182,10 +174,6 @@ uint32_t FlashBlockDriver::get_spare_seq_field(const uint8_t* spare_buff) const 
            seq0;
 }
 
-// ============================================================================
-// Read operations
-// ============================================================================
-
 std::optional<std::vector<uint8_t>> FlashBlockDriver::read_page_spare(uint32_t page_idx) const {
     if (page_idx >= m_page_count || m_image_data.empty()) {
         Log::Error("read_page_spare: invalid page index {}", page_idx);
@@ -307,10 +295,6 @@ std::optional<std::vector<uint8_t>> FlashBlockDriver::read(size_t offset, size_t
     return buffer;
 }
 
-// ============================================================================
-// Write operations
-// ============================================================================
-
 bool FlashBlockDriver::write_page_spare(uint32_t page_idx, const uint8_t* spare_buff) {
     if (page_idx >= m_page_count || m_image_data.empty()) {
         Log::Error("write_page_spare: invalid page index {}", page_idx);
@@ -397,10 +381,6 @@ bool FlashBlockDriver::write(size_t offset, const uint8_t* buffer, size_t length
 
     return true;
 }
-
-// ============================================================================
-// Image configuration
-// ============================================================================
 
 void FlashBlockDriver::init_spare() {
     uint8_t spare[0x10] = {0};
@@ -704,10 +684,6 @@ bool FlashBlockDriver::create_defaults(size_t img_len, uint32_t page_len, SpareT
 
     return true;
 }
-
-// ============================================================================
-// Image file I/O
-// ============================================================================
 
 std::optional<std::vector<uint8_t>> FlashBlockDriver::create_image(size_t length, uint32_t flash_config) {
     m_image_data.resize(length);
