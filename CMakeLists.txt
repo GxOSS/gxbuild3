@@ -15,6 +15,8 @@ add_subdirectory(extern/stfs)
 add_executable(gxbuild3
     src/GxBuild3.cpp
     src/Log.cpp
+    src/utils/FileManager.cpp
+    src/utils/FlashBlockDriver.cpp
     src/ini/IniParser.cpp
     src/patchers/BinaryParser.cpp
     src/patchers/Patcher.cpp
@@ -40,6 +42,7 @@ target_link_libraries(gxbuild3 PRIVATE
     GxCrypt
     spdlog::spdlog
     stfs
+    stdc++fs
 )
 
 if(MSVC)
