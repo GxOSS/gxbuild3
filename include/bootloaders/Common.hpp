@@ -71,33 +71,72 @@ typedef struct _generic_header {
     EXCRYPT_SIG signature;
 } generic_header;
 
+/*
 typedef struct _bl2_header {
     bl_header header;
-    uint8_t key[0x10];
+    uint8_t key[0x10]; // Per Box Digest?
     uint64_t padding_or_args[4];
-    EXCRYPT_SIG signature;
-    uint8_t globals[0x128]; // find out whats in here...
-    EXCRYPT_RSAPUB_2048 devkit_pubkey;
-    uint8_t sc_key[0x10];
-    char sc_salt[10];
-    char sd_salt[10];
+    EXCRYPT_SIG signature; 
+    uint8_t globals[0x128]; // "find out whats in here" bro what?
+    EXCRYPT_RSAPUB_2048 devkit_pubkey; // RSA Pub Key
+    uint8_t sc_key[0x10]; // nonce_3bl
+    char sc_salt[10]; // salt_3bl
+    char sd_salt[10]; // salt_4bl
     uint8_t cd_cbb_hash[0x14];  // CB_A has CB_B hash, CB_B has CD hash
     uint8_t more_globals[0x10]; // more_globals[1] has LDV
 } bl2_header;
+
+typedef struct _bl2_extra {
+    uint64_t post_output_addr;
+    uint64_t sb_flash_addr;
+    uint64_t soc_mmio_addr;
+    uint8_t console_allow[4];
+} bl2_extra;
+*/
+
+typedef struct _bl2_header {
+    uint16_t b_flags;
+    uint8_t pairing_data[3];
+    uint8_t lockdown_value;
+    uint8_t reserved_per_box[0xC];
+    uint8_t per_box_digest[0x10];
+    EXCRYPT_SIG signature;
+    EXCRYPT_RSAPUB_2048 rsa_pub_key;
+    uint8_t nonce_3bl[0x10];
+    char salt_3bl[10];
+    char salt_4bl[10];
+    uint8_t digest[0x14]; // For CB_B or CD
+    uint64_t post_output_addr;
+    uint64_t sb_flash_addr;
+    uint64_t soc_mmio_addr;
+    uint8_t console_allow[4];
+} bl2_header;
+
 
 typedef struct _bl3_header {
     generic_header header;
     uint8_t signature[0x100];
 } bl3_header;
 
+/*
 typedef struct _bl4_header {
     bl_header header;
     uint8_t key[0x10];
-    EXCRYPT_SIG signature;  // only valid on devkits
+    EXCRYPT_SIG signature;  
     uint8_t idk_yet[0x120]; // unused?
     char cf_salt[10];
     uint16_t unused2;
     uint8_t ce_hash[0x14];
+} bl4_header;
+*/
+
+typedef struct _bl4_header {
+    bl_header header;
+    uint8_t rsa_pub_key[0x10];
+    EXCRYPT_SIG signature; // only valid on devkits
+    uint8_t nonce_6bl[0x10]; // Not listed in bltool?
+    char salt_6bl[10];
+    uint8_t digest_5bl[0x14];
 } bl4_header;
 
 typedef struct _bl5_header {
@@ -118,10 +157,36 @@ typedef struct _bl6_header {
     uint32_t cg_size;
     uint8_t key[0x10];
     uint8_t pairing[0x200];
+
     EXCRYPT_SIG signature;
     uint8_t cg_hmac[0x10];
     uint8_t cg_hash[0x14];
 } bl6_header;
+
+struct CfMetadata {
+    // Plain - Offset 0x0 in payload / 0x10 Absolute
+    uint16_t source_version; // base_ver
+    uint16_t target_version; // target_ver
+    uint32_t reserved_prefix; // bltool - "Unknown" ?
+    uint32_t cg_size;
+    uint8_t hmac_salt[16];
+};
+
+struct CfMetadataDecrypted {
+    // Decrypted 0x30
+    uint16_t cg_blocks_used;
+    std::vector<uint16_t> cg_block_numbers; // 223 entries
+    EXCRYPT_SIG signature;
+    uint8_t cg_nonce[0x10]; // cg_hmac
+    uint8_t cg_digest[0x14]; // cg_hash
+
+    // PerBoxData
+    uint8_t reserved_per_box[0x2B];
+    uint8_t update_slot;
+    uint8_t pairing_data[3];
+    uint8_t lockdown_value;
+    uint8_t per_box_digest[0x10]; // key?
+};
 
 typedef struct _7bl_header {
     bl_header header;
