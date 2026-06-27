@@ -318,7 +318,6 @@ std::vector<uint8_t> FlashImage::build(const flash_image_t& image) const {
             regions.emplace_back(offset, image.patchslot_0.cg->size);
         }
     }
-F
     // Patchslot 1
     if (image.header.patch_slots > 1 && image.patchslot_1.cf) {
         uint32_t offset = image.header.cf1_offset;
