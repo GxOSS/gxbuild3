@@ -114,13 +114,13 @@ nand_results_t read(const std::vector<uint8_t>& data) {
                 results.cd = next_next_result;
                 next_offset = find_next_bl_offset(results.cd.offset, results.cd.size);
             } else {
-                throw std::runtime_error("Unknown bootloader chain: " + std::to_string(bootloader_type2));
+                throw std::runtime_error("Unknown bootloader chain: " + std::to_string(static_cast<uint16_t>(bootloader_type2)));
             }
         } else if (bootloader_type == CD) {
             results.cd = next_result;
             // single-cb
         } else {
-            throw std::runtime_error("Unknown bootloader chain: " + std::to_string(bootloader_type));
+            throw std::runtime_error("Unknown bootloader chain: " + std::to_string(static_cast<uint16_t>(bootloader_type)));
         }
     }
 
