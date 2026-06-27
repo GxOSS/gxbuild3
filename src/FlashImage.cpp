@@ -3,6 +3,20 @@
 
 using namespace gxbuild3::bootloaders;
 
+bl_type get_bl_type(uint16_t value) {
+    switch (value) {
+        case 0x342: return CB;
+        case 0x343: return SC;
+        case 0x344: return CD;
+        case 0x345: return CE;
+        case 0x346: return CF;
+        case 0x347: return CG;
+        case 0xD4D: return XKE;
+        case 0xE4E: return KV;
+        default:
+            throw std::runtime_error("Unknown bootloader type: " + std::to_string(value));
+    }
+}
 // Helper function to read a bootloader header at a given offset
 static auto read_bl_header(const std::vector<uint8_t>& data, uint32_t offset) -> std::optional<bl_results_t> {
     // Check bounds: bl_header is 0x10 bytes
@@ -19,6 +33,7 @@ static auto read_bl_header(const std::vector<uint8_t>& data, uint32_t offset) ->
     }
     
     bl_results_t result;
+    result.magic = bl_hdr->magic;
     result.offset = offset;
     result.version = bl_hdr->version;
     result.size = bl_hdr->size;
@@ -66,82 +81,82 @@ nand_results_t read(const std::vector<uint8_t>& data) {
     results.payload_indicator = header->payload_indicator;
     results.patch_slots = header->patch_slots;
     
-    // Parse CB (2BL) offset
-    // In the new NAND header layout, entrypoint at 0x08 serves as the CB offset
+    // Parse CB (2BL) offset from header
+    // First CB is always CB_or_A
     auto cb_result = read_bl_header(data, header->entrypoint);
     if (!cb_result) {
         results.valid = false;
         return results;
     }
     results.cb_or_a = *cb_result;
-    
-    // Walk the bootloader chain: CB -> CD -> CE -> CF
-    // Start with CB and follow the chain
+
     uint32_t current_offset = results.cb_or_a.offset;
     uint32_t current_size = results.cb_or_a.size;
     
-    // Parse CD (3BL) - next after CB
     uint32_t next_offset = find_next_bl_offset(current_offset, current_size);
-    auto cd_result = read_bl_header(data, next_offset);
-    if (cd_result) {
-        results.cd = *cd_result;
-        current_offset = results.cd.offset;
-        current_size = results.cd.size;
-        
-        // Parse CE (4BL) - next after CD
-        next_offset = find_next_bl_offset(current_offset, current_size);
-        auto ce_result = read_bl_header(data, next_offset);
-        if (ce_result) {
-            results.ce = *ce_result;
-            current_offset = results.ce.offset;
-            current_size = results.ce.size;
-            
-            // Parse CF (5BL) - next after CE
-            next_offset = find_next_bl_offset(current_offset, current_size);
-            auto cf_result = read_bl_header(data, next_offset);
-            if (cf_result) {
-                results.cf0 = *cf_result;
-                current_offset = results.cf0.offset;
-                current_size = results.cf0.size;
-                
-                // Parse CG (6BL) - next after CF
-                next_offset = find_next_bl_offset(current_offset, current_size);
-                auto cg_result = read_bl_header(data, next_offset);
-                if (cg_result) {
-                    results.cg0 = *cg_result;
-                }
+    auto next_result = read_bl_header(data, next_offset);
+
+    if (next_result) {
+        bl_type bootloader_type = get_bl_type(next_result.magic);
+        next_offset = find_next_bl_offset(next_result.offset, next_result.size);
+        if (bootloader_type == CB) {
+            // more then 1 cb
+            auto next_next_result = read_bl_header(data, next_offset);
+            bl_type bootloader_type2 = get_bl_type(next_next_result.magic);
+            if (bootloader_type2 == CB) {
+                // glitch3
+                results.cbx = next_result;
+                results.cbb = next_next_result;
+                next_offset = find_next_bl_offset(results.cbb.offset, results.cbb.size);
+            } else if (bootloader_type2 == CD) {
+                // split-cb
+                results.cbb = next_result;
+                results.cd = next_next_result;
+                next_offset = find_next_bl_offset(results.cd.offset, results.cd.size);
+            } else {
+                throw std::runtime_error("Unknown bootloader chain: " + std::to_string(bootloader_type2));
             }
+        } else if (bootloader_type == CD) {
+            results.cd = next_result;
+            // single-cb
+        } else {
+            throw std::runtime_error("Unknown bootloader chain: " + std::to_string(bootloader_type));
         }
     }
+
+    // Walk the bootloader chain: CB -> CD -> CE
+    // Start with CB and follow the chain
+    auto ce_result = read_bl_header(data, next_offset);
+    if (ce_result) {
+        results.ce = *ce_result;
+        current_offset = results.ce.offset;
+        current_size = results.ce.size;
+        next_offset = find_next_bl_offset(current_offset, current_size);
+    }
     
-    // Also check CF from NAND header if we haven't found it yet
-    if (!results.cf0 && header->cf1_offset != 0 && header->cf1_offset != 0xFFFFFFFF) {
+
+    // patchslot 0
+    if (header->cf1_offset != 0 && header->cf1_offset != 0xFFFFFFFF) {
         auto cf_result = read_bl_header(data, header->cf1_offset);
         if (cf_result) {
             results.cf0 = *cf_result;
+            next_offset = find_next_bl_offset(results.cf0.offset, results.cf0.size);
+            auto cg0_result = read_bl_header(data, next_offset);
+            if (cg0_result) {
+                results.cg0 = *cg0_result;
+            }
         }
     }
     
-    // Handle patchslots: if patch_slots > 1, there's a second CF/CG pair
-    // According to the user: the second CF/CG pair is located directly after the first
+    // patchslot 1
     if (header->patch_slots > 1 && results.cf0) {
-        // Second CF is directly after the first CF
-        uint32_t cf1_offset = results.cf0.offset + results.cf0.size;
+        // Second CF is directly after the first CG
+        uint32_t cf1_offset = results.cg0.offset + results.cg0.size;
         auto cf1_result = read_bl_header(data, cf1_offset);
         if (cf1_result) {
             results.cf1 = *cf1_result;
-        } else if (header->cf1_offset != 0 && header->cf1_offset != 0xFFFFFFFF) {
-            // Fallback: try the explicit cf1_offset from header
-            cf1_result = read_bl_header(data, header->cf1_offset);
-            if (cf1_result) {
-                results.cf1 = *cf1_result;
-            }
-        }
-        
-        // Second CG is directly after the first CG
-        if (results.cg0) {
-            uint32_t cg1_offset = results.cg0.offset + results.cg0.size;
-            auto cg1_result = read_bl_header(data, cg1_offset);
+            next_offset = find_next_bl_offset(results.cf1.offset, results.cf1.size);
+            auto cg1_result = read_bl_header(data, next_offset);
             if (cg1_result) {
                 results.cg1 = *cg1_result;
             }

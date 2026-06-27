@@ -126,3 +126,14 @@ typedef struct _7bl_header {
     uint32_t new_size;
     uint8_t new_hash[0x14];
 } bl7_header;
+
+typedef enum _bl_type {
+    CB = 0x342,
+    SC = 0x343,
+    CD = 0x344,
+    CE = 0x345,
+    CF = 0x346,
+    CG = 0x347,
+    XKE = 0xD4D,
+    KV = 0xE4E
+} bl_type;

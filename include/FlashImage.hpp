@@ -36,6 +36,7 @@ typedef struct BlResults {
     uint32_t offset;
     uint8_t version;
     uint32_t size;
+    uint32_t magic;
 } bl_results_t;
 
 typedef struct NandResults {
