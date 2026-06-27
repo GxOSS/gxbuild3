@@ -7,6 +7,7 @@
 #include "bootloaders/7bl.hpp"
 #include "bootloaders/Common.hpp"
 #include "bootloaders/FlashFileSystem.hpp"
+#include <cstdint>
 
 // NAND Header structure based on NANDFS.md
 // Note: This appears to start with a bl_header (magic, version, pairing, flags, entrypoint, size)
@@ -122,4 +123,4 @@ bool encrypt_all(const flash_image_t& flash, const std::vector<uint8_t>& cpu_key
 
 bool extract_all(const flash_image_t& flash, std::string output_path);
 
-bool build(const flash_image_t& flash, std::string output_path);
+std::vector<uint8_t> build(const flash_image_t& image);

@@ -255,3 +255,114 @@ flash_image_t FlashImage::parse(const std::vector<uint8_t>& data) {
     
     return image;
 }
+
+std::vector<uint8_t> FlashImage::build(const flash_image_t& image) const {
+    if (!image.cb_or_A) {
+        throw std::runtime_error("Cannot build: missing CB");
+    }
+
+    // 1. Calculate required buffer size
+    std::vector<std::pair<uint32_t, uint32_t>> regions; // {offset, size}
+
+    regions.emplace_back(0, sizeof(raw_nand_header_t)); // NAND header
+
+    // Bootloader chain (sequential: CB -> CD -> CE)
+    uint32_t bl_chain_offset = image.header.entrypoint;
+    if (image.cb_or_A) {
+        regions.emplace_back(bl_chain_offset, image.cb_or_A->size);
+        bl_chain_offset += image.cb_or_A->size;
+    }
+    if (image.cd) {
+        regions.emplace_back(bl_chain_offset, image.cd->size);
+        bl_chain_offset += image.cd->size;
+    }
+    if (image.ce) {
+        regions.emplace_back(bl_chain_offset, image.ce->size);
+    }
+
+    // Patchslot 0: CF0 + CG0
+    if (image.patchslot_0.cf) {
+        uint32_t offset = image.header.cf1_offset;
+        regions.emplace_back(offset, image.patchslot_0.cf->size);
+        if (image.patchslot_0.cg) {
+            offset += image.patchslot_0.cf->size;
+            regions.emplace_back(offset, image.patchslot_0.cg->size);
+        }
+    }
+
+    // Patchslot 1: CF1 + CG1 (right after patchslot 0)
+    if (image.header.patch_slots > 1 && image.patchslot_1.cf) {
+        uint32_t offset = image.header.cf1_offset;
+        if (image.patchslot_0.cf) offset += image.patchslot_0.cf->size;
+        if (image.patchslot_0.cg) offset += image.patchslot_0.cg->size;
+        regions.emplace_back(offset, image.patchslot_1.cf->size);
+        if (image.patchslot_1.cg) {
+            offset += image.patchslot_1.cf->size;
+            regions.emplace_back(offset, image.patchslot_1.cg->size);
+        }
+    }
+
+    // SMC
+    if (image.smc && image.header.smc_offset != 0xFFFFFFFF) {
+        regions.emplace_back(image.header.smc_offset, image.smc->size);
+    }
+
+    // Keyvault
+    if (image.keyvault && image.header.kv_offset != 0xFFFFFFFF) {
+        regions.emplace_back(image.header.kv_offset, image.keyvault->size);
+    }
+
+    // Calculate total size
+    uint32_t total_size = 0;
+    for (const auto& [offset, size] : regions) {
+        total_size = std::max(total_size, offset + size);
+    }
+
+    // 2. Create zero-filled buffer
+    std::vector<uint8_t> buffer(total_size, 0x00);
+
+    // 3. Helper to safely copy data
+    auto copy_to = [&](uint32_t offset, const std::vector<uint8_t>& data) {
+        if (offset + data.size() > buffer.size()) {
+            throw std::runtime_error("Buffer overflow at offset " + std::to_string(offset));
+        }
+        std::memcpy(buffer.data() + offset, data.data(), data.size());
+    };
+
+    // Copy NAND header
+    std::memcpy(buffer.data(), &image.header, sizeof(raw_nand_header_t));
+
+    // Copy bootloader chain
+    bl_chain_offset = image.header.entrypoint;
+    if (image.cb_or_A) { copy_to(bl_chain_offset, *image.cb_or_A); bl_chain_offset += image.cb_or_A->size; }
+    if (image.cd)      { copy_to(bl_chain_offset, *image.cd);      bl_chain_offset += image.cd->size; }
+    if (image.ce)      { copy_to(bl_chain_offset, *image.ce); }
+
+    // Copy patchslots
+    uint32_t ps_offset = image.header.cf1_offset;
+    if (image.patchslot_0.cf) {
+        copy_to(ps_offset, *image.patchslot_0.cf);
+        ps_offset += image.patchslot_0.cf->size;
+        if (image.patchslot_0.cg) {
+            copy_to(ps_offset, *image.patchslot_0.cg);
+            ps_offset += image.patchslot_0.cg->size;
+        }
+    }
+    if (image.header.patch_slots > 1 && image.patchslot_1.cf) {
+        copy_to(ps_offset, *image.patchslot_1.cf);
+        ps_offset += image.patchslot_1.cf->size;
+        if (image.patchslot_1.cg) {
+            copy_to(ps_offset, *image.patchslot_1.cg);
+        }
+    }
+
+    // Copy SMC and Keyvault
+    if (image.smc && image.header.smc_offset != 0xFFFFFFFF) {
+        copy_to(image.header.smc_offset, *image.smc);
+    }
+    if (image.keyvault && image.header.kv_offset != 0xFFFFFFFF) {
+        copy_to(image.header.kv_offset, *image.keyvault);
+    }
+
+    return buffer;
+}
