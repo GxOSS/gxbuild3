@@ -5,6 +5,13 @@
 #include <optional>
 #include <vector>
 
+struct CgMetadata {
+    uint32_t original_size;
+    uint8_t original_hash[0x14];
+    uint32_t new_size;
+    uint8_t new_hash[0x14];
+};
+
 class BootloaderCg {
   public:
     bl7_header header;

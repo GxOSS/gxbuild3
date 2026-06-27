@@ -85,6 +85,11 @@ typedef struct _bl2_header {
     uint8_t more_globals[0x10]; // more_globals[1] has LDV
 } bl2_header;
 
+typedef struct _bl3_header {
+    generic_header header;
+    uint8_t signature[0x100];
+} bl3_header;
+
 typedef struct _bl4_header {
     bl_header header;
     uint8_t key[0x10];

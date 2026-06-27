@@ -1,3 +1,4 @@
+/*
 #pragma once
 #include "Common.hpp"
 
@@ -19,3 +20,4 @@ class BootloaderCe {
     std::vector<uint8_t> decompress(std::vector<uint8_t>& out) const;
     std::vector<uint8_t> serialize() const;
 };
+*/

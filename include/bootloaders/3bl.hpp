@@ -7,7 +7,7 @@
 
 class BootloaderSc {
   public:
-    generic_header header;
+    bl3_header header;
     std::vector<uint8_t> data;
     bool decrypted = false;
 
