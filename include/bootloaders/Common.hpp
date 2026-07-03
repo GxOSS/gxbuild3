@@ -4,6 +4,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <vector>
 
 // NOTE: This file is derived from InvoxiPlayGames's xenon-bltool.
 // As its just a set of struct definitions and data types,

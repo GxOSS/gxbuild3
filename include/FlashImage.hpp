@@ -2,7 +2,7 @@
 #include "bootloaders/2bl.hpp"
 #include "bootloaders/3bl.hpp"
 #include "bootloaders/4bl.hpp"
-//#include "bootloaders/5bl.hpp"
+#include "bootloaders/5bl.hpp"
 #include "bootloaders/6bl.hpp"
 #include "bootloaders/7bl.hpp"
 #include "bootloaders/Common.hpp"
@@ -119,6 +119,6 @@ flash_image_t parse(const std::vector<uint8_t>& data);
 
 // bool encrypt_all(const flash_image_t& flash, const std::vector<uint8_t>& cpu_key);
 
-// bool extract_all(const flash_image_t& flash, std::string output_path);
+bool extract_all(const flash_image_t& flash, const std::filesystem::path& output_dir, const std::vector<uint8_t>& cpu_key_bytes, const std::vector<uint8_t>& bl_key_bytes);
 
 bool build(const flash_image_t& flash, std::string output_path);

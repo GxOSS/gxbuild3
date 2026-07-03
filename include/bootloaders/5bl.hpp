@@ -1,4 +1,3 @@
-/*
 #pragma once
 #include "Common.hpp"
 
@@ -17,7 +16,5 @@ class BootloaderCe {
     void decrypt(const uint8_t cd_key[16]);
 
     bool is_decrypted() const;
-    std::vector<uint8_t> decompress(std::vector<uint8_t>& out) const;
     std::vector<uint8_t> serialize() const;
 };
-*/
