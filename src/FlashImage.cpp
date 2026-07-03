@@ -358,8 +358,10 @@ std::vector<uint8_t> FlashImage::build(const flash_image_t& image) const {
 
     bl_chain_offset = image.header.entrypoint;
     if (image.cb_or_A) { copy_to(bl_chain_offset, *image.cb_or_A); bl_chain_offset += image.cb_or_A->size; }
-    if (image.cd)      { copy_to(bl_chain_offset, *image.cd);      bl_chain_offset += image.cd->size; }
-    if (image.ce)      { copy_to(bl_chain_offset, *image.ce); }
+    if (image.cbx) { copy_to(bl_chain_offset, *image.cbx); bl_chain_offset += image.cbx->size; }
+    if (image.cbb) { copy_to(bl_chain_offset, *image.cbb); bl_chain_offset += image.cbb->size; }
+    if (image.cd) { copy_to(bl_chain_offset, *image.cd); bl_chain_offset += image.cd->size; }
+    if (image.ce) { copy_to(bl_chain_offset, *image.ce); }
 
     uint32_t ps_offset = image.header.cf1_offset;
     if (image.patchslot_0.cf) {
