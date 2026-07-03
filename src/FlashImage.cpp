@@ -112,8 +112,8 @@ nand_results_t read(const std::vector<uint8_t>& data) {
             uint32_t possible_other_cb_offset = find_next_bl_offset(next_cb_offset, next_cb_result->size);
             auto possible_other_cb_result = read_bl_header(data, possible_other_cb_offset);
             if (possible_other_cb_result && get_bl_type(possible_other_cb_result->magic) == CB) {
-                results.cbx = *next_cb_result
-                results.cbb = *possible_other_cb_result
+                results.cbx = *next_cb_result;
+                results.cbb = *possible_other_cb_result;
                 current_offset = results.cbb->offset;
                 current_size = results.cbb->size;
             } else {
@@ -155,11 +155,6 @@ nand_results_t read(const std::vector<uint8_t>& data) {
                     results.cg0 = *cg_result;
                 }
             }
-        } else if (bootloader_type == CD) {
-            results.cd = next_result;
-            // single-cb
-        } else {
-            throw std::runtime_error("Unknown bootloader chain: " + std::to_string(static_cast<uint16_t>(bootloader_type)));
         }
     }
 
@@ -241,14 +236,9 @@ flash_image_t FlashImage::parse(const std::vector<uint8_t>& data) {
         image.cb_or_A = extract_bootloader(results.cb_or_a.offset, results.cb_or_a.size);
     }
 
-    if (results.cbx.offset != 0 && results.cbx.size != 0) {
-        image.cbx = extract_bootloader(results.cbx.offset, results.cbx.size);
+    if (results.cbx && results.cbx->offset != 0 && results.cbx->size != 0) {
+        image.cb_X = extract_bootloader(results.cbx->offset, results.cbx->size);
     }
-
-    if (results.cbb.offset != 0 && results.cbb.size != 0) {
-        image.cbb = extract_bootloader(results.cbb.offset, results.cbb.size);
-    }
-    
     if (results.cbb && results.cbb->offset != 0 && results.cbb->size != 0) {
         image.cb_B = extract_bootloader(results.cbb->offset, results.cbb->size);
     }
@@ -461,6 +451,7 @@ bool build(const flash_image_t& flash, std::string output_path) {
     (void)flash;
     (void)output_path;
     return false;
+}
 std::vector<uint8_t> FlashImage::build(const flash_image_t& image) const {
     if (!image.cb_or_A) {
         throw std::runtime_error("Cannot build: missing CB");
@@ -518,12 +509,12 @@ std::vector<uint8_t> FlashImage::build(const flash_image_t& image) const {
     // Patchslot 1
     if (image.header.patch_slots > 1 && image.patchslot_1.cf) {
         uint32_t offset = image.header.cf1_offset;
-        if (image.patchslot_0.cf) offset += image.patchslot_0.cf->size;
-        if (image.patchslot_0.cg) offset += image.patchslot_0.cg->size;
-        regions.emplace_back(offset, image.patchslot_1.cf->size);
-        if (image.patchslot_1.cg) {
-            offset += image.patchslot_1.cf->size;
-            regions.emplace_back(offset, image.patchslot_1.cg->size);
+        if (image.patchslot_0->cf) offset += image.patchslot_0->cf->size;
+        if (image.patchslot_0->cg) offset += image.patchslot_0->cg->size;
+        regions.emplace_back(offset, image.patchslot_1->cf->size);
+        if (image.patchslot_1->cg) {
+            offset += image.patchslot_1->cf->size;
+            regions.emplace_back(offset, image.patchslot_1->cg->size);
         }
     }
 

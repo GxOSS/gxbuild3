@@ -8,7 +8,7 @@
 
 // NOTE: This file is derived from InvoxiPlayGames's xenon-bltool.
 // As its just a set of struct definitions and data types,
-// it should fall under fair use and not violate the GPL license.
+// it should fall under fair use / technical info and not violate the GPL license.
 // If i am wrong then open a github issue or contact me at
 // EMAIL: exposuremg@protonmail.com
 // DISCORD: e3xp0
