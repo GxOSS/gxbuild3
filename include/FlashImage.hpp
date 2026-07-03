@@ -117,10 +117,10 @@ nand_results_t read(const std::vector<uint8_t>& data);
 
 flash_image_t parse(const std::vector<uint8_t>& data);
 
-bool decrypt_all(const flash_image_t& flash, const std::vector<uint8_t>& cpu_key);
+// bool decrypt_all(const flash_image_t& flash, const std::vector<uint8_t>& cpu_key);
 
-bool encrypt_all(const flash_image_t& flash, const std::vector<uint8_t>& cpu_key);
+// bool encrypt_all(const flash_image_t& flash, const std::vector<uint8_t>& cpu_key);
 
-bool extract_all(const flash_image_t& flash, std::string output_path);
+bool extract_all(const flash_image_t& flash, const std::filesystem::path& output_dir, const std::vector<uint8_t>& cpu_key_bytes, const std::vector<uint8_t>& bl_key_bytes);
 
 std::vector<uint8_t> build(const flash_image_t& image);

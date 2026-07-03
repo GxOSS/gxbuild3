@@ -1,3 +1,4 @@
+#include "FlashImage.hpp"
 #include "Ascii.hpp"
 #include "Log.hpp"
 #include "Utils.hpp"
@@ -313,6 +314,32 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                     Log::Info("1BL key loaded from options.ini");
                 }
             }
+    }
+
+    if (args.mode == "extract") {
+        if (!args.source_nand) {
+            Log::Error("Extraction requires a source NAND image (-l,--image)");
+            return 1;
+        }
+
+        auto nand_data = ReadFile(*args.source_nand);
+        if (!nand_data) {
+            Log::Error("Failed to read source NAND image: {}", args.source_nand->string());
+            return 1;
+        }
+
+        Log::Info("Parsing NAND image...");
+        auto flash = FlashImage::parse(*nand_data);
+
+        const auto output_dir = args.output_dir.value_or(std::filesystem::current_path());
+
+        Log::Info("Extracting components to '{}'...", output_dir.string());
+        if (extract_all(flash, output_dir, cpu_key_bytes, bl_key_bytes)) {
+            Log::Info("Extraction completed successfully.");
+            return 0;
+        } else {
+            Log::Error("Extraction failed.");
+            return 1;
         }
     }
 
