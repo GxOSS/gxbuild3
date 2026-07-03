@@ -11,6 +11,20 @@
 
 using namespace gxbuild3::bootloaders;
 
+bl_type get_bl_type(uint16_t value) {
+    switch (value) {
+        case 0x342: return CB;
+        case 0x343: return SC;
+        case 0x344: return CD;
+        case 0x345: return CE;
+        case 0x346: return CF;
+        case 0x347: return CG;
+        case 0xD4D: return XKE;
+        case 0xE4E: return KV;
+        default:
+            throw std::runtime_error("Unknown bootloader type: " + std::to_string(value));
+    }
+}
 // Helper function to read a bootloader header at a given offset
 static auto read_bl_header(const std::vector<uint8_t>& data, uint32_t offset) -> std::optional<bl_results_t> {
     // Check bounds: bl_header is 0x10 bytes
@@ -27,6 +41,7 @@ static auto read_bl_header(const std::vector<uint8_t>& data, uint32_t offset) ->
     }
     
     bl_results_t result;
+    result.magic = bl_hdr->magic;
     result.offset = offset;
     result.version = bswap16(bl_hdr->version);
     result.size = bswap32(bl_hdr->size);
@@ -91,12 +106,21 @@ nand_results_t read(const std::vector<uint8_t>& data) {
     const auto* cb_hdr = reinterpret_cast<const bl_header*>(data.data() + current_offset);
     uint16_t cb_flags = bswap16(cb_hdr->flags);
     if ((cb_flags & 0x0800) == 0x0800) {
-        uint32_t cb_b_offset = find_next_bl_offset(current_offset, current_size);
-        auto cb_b_result = read_bl_header(data, cb_b_offset);
-        if (cb_b_result) {
-            results.cbb = *cb_b_result;
-            current_offset = results.cbb->offset;
-            current_size = results.cbb->size;
+        uint32_t next_cb_offset = find_next_bl_offset(current_offset, current_size);
+        auto next_cb_result = read_bl_header(data, next_cb_offset);
+        if (next_cb_result) {
+            uint32_t possible_other_cb_offset = find_next_bl_offset(next_cb_offset, next_cb_result->size);
+            auto possible_other_cb_result = read_bl_header(data, possible_other_cb_offset);
+            if (possible_other_cb_result && get_bl_type(possible_other_cb_result->magic) == CB) {
+                results.cbx = *next_cb_result
+                results.cbb = *possible_other_cb_result
+                current_offset = results.cbb->offset;
+                current_size = results.cbb->size;
+            } else {
+                results.cbb = *next_cb_result;
+                current_offset = results.cbb->offset;
+                current_size = results.cbb->size;
+            }
         }
     }
     
@@ -131,7 +155,22 @@ nand_results_t read(const std::vector<uint8_t>& data) {
                     results.cg0 = *cg_result;
                 }
             }
+        } else if (bootloader_type == CD) {
+            results.cd = next_result;
+            // single-cb
+        } else {
+            throw std::runtime_error("Unknown bootloader chain: " + std::to_string(static_cast<uint16_t>(bootloader_type)));
         }
+    }
+
+    // Walk the bootloader chain: CB -> CD -> CE
+    // Start with CB and follow the chain
+    auto ce_result = read_bl_header(data, next_offset);
+    if (ce_result) {
+        results.ce = *ce_result;
+        current_offset = results.ce.offset;
+        current_size = results.ce.size;
+        next_offset = find_next_bl_offset(current_offset, current_size);
     }
     
     // Also check CF from NAND header if we haven't found it yet
@@ -140,6 +179,11 @@ nand_results_t read(const std::vector<uint8_t>& data) {
         auto cf_result = read_bl_header(data, cf1_offset_swapped);
         if (cf_result) {
             results.cf0 = *cf_result;
+            next_offset = find_next_bl_offset(results.cf0.offset, results.cf0.size);
+            auto cg0_result = read_bl_header(data, next_offset);
+            if (cg0_result) {
+                results.cg0 = *cg0_result;
+            }
         }
     }
     
@@ -195,6 +239,14 @@ flash_image_t FlashImage::parse(const std::vector<uint8_t>& data) {
     
     if (results.cb_or_a.offset != 0 && results.cb_or_a.size != 0) {
         image.cb_or_A = extract_bootloader(results.cb_or_a.offset, results.cb_or_a.size);
+    }
+
+    if (results.cbx.offset != 0 && results.cbx.size != 0) {
+        image.cbx = extract_bootloader(results.cbx.offset, results.cbx.size);
+    }
+
+    if (results.cbb.offset != 0 && results.cbb.size != 0) {
+        image.cbb = extract_bootloader(results.cbb.offset, results.cbb.size);
     }
     
     if (results.cbb && results.cbb->offset != 0 && results.cbb->size != 0) {
@@ -409,4 +461,121 @@ bool build(const flash_image_t& flash, std::string output_path) {
     (void)flash;
     (void)output_path;
     return false;
+std::vector<uint8_t> FlashImage::build(const flash_image_t& image) const {
+    if (!image.cb_or_A) {
+        throw std::runtime_error("Cannot build: missing CB");
+    }
+
+    // Calculate required buffer size
+    std::vector<std::pair<uint32_t, uint32_t>> regions; // {offset, size}
+
+    regions.emplace_back(0, sizeof(raw_nand_header_t)); // NAND header
+
+    // SMC
+    if (image.smc && image.header.smc_offset != 0xFFFFFFFF) {
+        regions.emplace_back(image.header.smc_offset, image.smc->size);
+    }
+
+    // Keyvault
+    if (image.keyvault && image.header.kv_offset != 0xFFFFFFFF) {
+        regions.emplace_back(image.header.kv_offset, image.keyvault->size);
+    }
+
+    // Bootloader chain (sequential: CB -> CD -> CE)
+    uint32_t bl_chain_offset = image.header.entrypoint;
+    if (image.cb_or_A) {
+        regions.emplace_back(bl_chain_offset, image.cb_or_A->size);
+        bl_chain_offset += image.cb_or_A->size;
+    }
+
+    if (image.cbx) {
+        regions.emplace_back(bl_chain_offset, image.cbx->size);
+        bl_chain_offset += image.cbx->size;
+    }
+
+    if (image.cbb) {
+        regions.emplace_back(bl_chain_offset, image.cbb->size);
+        bl_chain_offset += image.cbb->size;
+    }
+    
+    if (image.cd) {
+        regions.emplace_back(bl_chain_offset, image.cd->size);
+        bl_chain_offset += image.cd->size;
+    }
+    if (image.ce) {
+        regions.emplace_back(bl_chain_offset, image.ce->size);
+    }
+
+    // Patchslot 0
+    if (image.patchslot_0.cf) {
+        uint32_t offset = image.header.cf1_offset;
+        regions.emplace_back(offset, image.patchslot_0.cf->size);
+        if (image.patchslot_0.cg) {
+            offset += image.patchslot_0.cf->size;
+            regions.emplace_back(offset, image.patchslot_0.cg->size);
+        }
+    }
+    // Patchslot 1
+    if (image.header.patch_slots > 1 && image.patchslot_1.cf) {
+        uint32_t offset = image.header.cf1_offset;
+        if (image.patchslot_0.cf) offset += image.patchslot_0.cf->size;
+        if (image.patchslot_0.cg) offset += image.patchslot_0.cg->size;
+        regions.emplace_back(offset, image.patchslot_1.cf->size);
+        if (image.patchslot_1.cg) {
+            offset += image.patchslot_1.cf->size;
+            regions.emplace_back(offset, image.patchslot_1.cg->size);
+        }
+    }
+
+    uint32_t total_size = 0;
+    for (const auto& [offset, size] : regions) {
+        total_size = std::max(total_size, offset + size);
+    }
+
+    // zero-filled buffer
+    std::vector<uint8_t> buffer(total_size, 0x00);
+
+    // safely copy data
+    auto copy_to = [&](uint32_t offset, const std::vector<uint8_t>& data) {
+        if (offset + data.size() > buffer.size()) {
+            throw std::runtime_error("Buffer overflow at offset " + std::to_string(offset));
+        }
+        std::memcpy(buffer.data() + offset, data.data(), data.size());
+    };
+
+    // copy to buffer
+    std::memcpy(buffer.data(), &image.header, sizeof(raw_nand_header_t));
+
+    if (image.smc && image.header.smc_offset != 0xFFFFFFFF) {
+        copy_to(image.header.smc_offset, *image.smc);
+    }
+    if (image.keyvault && image.header.kv_offset != 0xFFFFFFFF) {
+        copy_to(image.header.kv_offset, *image.keyvault);
+    }
+
+    bl_chain_offset = image.header.entrypoint;
+    if (image.cb_or_A) { copy_to(bl_chain_offset, *image.cb_or_A); bl_chain_offset += image.cb_or_A->size; }
+    if (image.cbx) { copy_to(bl_chain_offset, *image.cbx); bl_chain_offset += image.cbx->size; }
+    if (image.cbb) { copy_to(bl_chain_offset, *image.cbb); bl_chain_offset += image.cbb->size; }
+    if (image.cd) { copy_to(bl_chain_offset, *image.cd); bl_chain_offset += image.cd->size; }
+    if (image.ce) { copy_to(bl_chain_offset, *image.ce); }
+
+    uint32_t ps_offset = image.header.cf1_offset;
+    if (image.patchslot_0.cf) {
+        copy_to(ps_offset, *image.patchslot_0.cf);
+        ps_offset += image.patchslot_0.cf->size;
+        if (image.patchslot_0.cg) {
+            copy_to(ps_offset, *image.patchslot_0.cg);
+            ps_offset += image.patchslot_0.cg->size;
+        }
+    }
+    if (image.header.patch_slots > 1 && image.patchslot_1.cf) {
+        copy_to(ps_offset, *image.patchslot_1.cf);
+        ps_offset += image.patchslot_1.cf->size;
+        if (image.patchslot_1.cg) {
+            copy_to(ps_offset, *image.patchslot_1.cg);
+        }
+    }
+
+    return buffer;
 }

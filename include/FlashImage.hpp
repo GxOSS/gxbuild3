@@ -7,6 +7,7 @@
 #include "bootloaders/7bl.hpp"
 #include "bootloaders/Common.hpp"
 #include "bootloaders/FlashFileSystem.hpp"
+#include <cstdint>
 
 // NAND Header structure based on NANDFS.md
 // Note: This appears to start with a bl_header (magic, version, pairing, flags, entrypoint, size)
@@ -36,6 +37,7 @@ typedef struct BlResults {
     uint32_t offset;
     uint8_t version;
     uint32_t size;
+    uint32_t magic;
 } bl_results_t;
 
 typedef struct NandResults {
@@ -121,4 +123,4 @@ flash_image_t parse(const std::vector<uint8_t>& data);
 
 bool extract_all(const flash_image_t& flash, const std::filesystem::path& output_dir, const std::vector<uint8_t>& cpu_key_bytes, const std::vector<uint8_t>& bl_key_bytes);
 
-bool build(const flash_image_t& flash, std::string output_path);
+std::vector<uint8_t> build(const flash_image_t& image);
