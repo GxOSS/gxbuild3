@@ -16,6 +16,7 @@ add_executable(gxbuild3
     src/Main.cpp
     src/Log.cpp
     src/Utils.cpp
+    src/FlashImage.cpp
     src/utils/FlashBlockDriver.cpp
     src/ini/IniParser.cpp
     src/patchers/BinaryParser.cpp

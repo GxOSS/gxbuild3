@@ -13,6 +13,7 @@ class BootloaderCb {
     bl2_header header;
     std::vector<uint8_t> data;
     std::optional<std::array<uint8_t, 16>> derived_key;
+    std::optional<bl2_metadata> metadata;
     bool decrypted = false;
 
     static BootloaderCb parse(const std::vector<uint8_t>& bytes);

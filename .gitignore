@@ -69,3 +69,5 @@ Testing/
 .cache/
 
 testdata
+gxbuild3_code_review.md
+parser.rs

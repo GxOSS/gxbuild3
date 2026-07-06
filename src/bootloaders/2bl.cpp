@@ -148,7 +148,7 @@ void BootloaderCb::decrypt_mfg(const uint8_t cb_a_key[16]) {
 }
 
 void BootloaderCb::populate_metadata() {
-    CbMetadata meta = {};
+    bl2_metadata meta = {};
     uint8_t ldv = data[0x13];
     uint64_t tmp = 0;
 
@@ -156,16 +156,9 @@ void BootloaderCb::populate_metadata() {
         return;
 
     meta.b_flags = header.header.flags;
-
-    meta.pairing_data[0] = data[0x12];
-    meta.pairing_data[1] = data[0x11];
-    meta.pairing_data[2] = data[0x10];
+    meta.pairing_data = std::array<uint8_t, 3>{data[0x12], data[0x11], data[0x10]};
 
     meta.lockdown_value = (ldv <= 16) ? ldv : 0;
-
-    std::memcpy(meta.reserved_per_box, &data[0x14], 0xC);
-    std::memcpy(meta.per_box_digest, &data[0x20], 0x10);
-    std::memcpy(meta.signature, &data[0x30], 0x100);
 
     std::memcpy(&tmp, &data[0x240], 8);
     meta.post_output_addr = bswap64(tmp);
@@ -176,12 +169,9 @@ void BootloaderCb::populate_metadata() {
     std::memcpy(&tmp, &data[0x250], 8);
     meta.soc_mmio_addr = bswap64(tmp);
 
-    std::memcpy(meta.rsa_pub_key, &data[0x258], 0x110);
-    std::memcpy(meta.nonce_3bl, &data[0x368], 0x10);
-    std::memcpy(meta.salt_3bl, &data[0x378], 0xA);
-    std::memcpy(meta.salt_4bl, &data[0x382], 0xA);
-    std::memcpy(meta.digest_4bl, &data[0x38C], 0x14);
-    std::memcpy(meta.console_allow, &data[0x3A0], 4);
+    std::array<uint8_t, 4> console_allow = {};
+    std::memcpy(console_allow.data(), &data[0x3A0], console_allow.size());
+    meta.console_allow = console_allow;
 
     metadata = meta;
 }

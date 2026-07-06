@@ -101,6 +101,7 @@ namespace gxbuild3::utils {
         uint32_t page_length() const { return m_page_length; }
         uint32_t page_count() const { return m_page_count; }
         size_t image_length_real() const { return m_image_length_real; }
+        size_t image_length_raw() const { return m_image_length_raw; }
         uint32_t fs_offset() const { return m_fs_offset; }
         uint32_t reserve_block_idx() const { return m_reserve_block_idx; }
         uint32_t config_block_idx() const { return m_config_block_idx; }
@@ -120,6 +121,7 @@ namespace gxbuild3::utils {
         uint32_t m_page_length = 0;
         uint32_t m_page_count = 0;
         size_t m_image_length_real = 0;
+        size_t m_image_length_raw = 0;
         uint32_t m_fs_offset = 0;
         uint32_t m_reserve_block_idx = 0;
         uint32_t m_config_block_idx = 0;

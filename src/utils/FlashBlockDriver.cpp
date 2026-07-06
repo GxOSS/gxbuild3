@@ -18,6 +18,8 @@ namespace gxbuild3::utils {
         m_block_count = 0;
         m_block_length = 0;
         m_page_length = 0;
+        m_image_length_raw = 0;
+        m_image_length_real = 0;
     }
 
     FlashBlockDriver::FlashBlockDriver(std::vector<uint8_t>&& image_data)
@@ -28,6 +30,8 @@ namespace gxbuild3::utils {
         m_block_count = 0;
         m_block_length = 0;
         m_page_length = 0;
+        m_image_length_raw = m_image_data.size();
+        m_image_length_real = 0;
     }
 
     bool FlashBlockDriver::is_mobile_data(uint8_t block_type) const {
@@ -173,7 +177,14 @@ namespace gxbuild3::utils {
     }
 
     std::optional<std::vector<uint8_t>> FlashBlockDriver::read_page_spare(uint32_t page_idx) const {
-        if (page_idx >= m_page_count || m_image_data.empty()) {
+        if (m_page_length < 0x210 || m_image_data.empty()) {
+            Log::Error("read_page_spare: spare not available");
+            return std::nullopt;
+        }
+
+        const uint32_t raw_page_count =
+            static_cast<uint32_t>(m_image_data.size() / m_page_length);
+        if (page_idx >= raw_page_count) {
             Log::Error("read_page_spare: invalid page index {}", page_idx);
             return std::nullopt;
         }
@@ -191,7 +202,12 @@ namespace gxbuild3::utils {
 
     std::optional<std::vector<uint8_t>>
     FlashBlockDriver::read_block_spare(uint32_t block_idx) const {
-        if (block_idx >= m_block_count || m_image_data.empty()) {
+        if (m_page_length < 0x210 || m_image_data.empty()) {
+            Log::Error("read_block_spare: spare not available");
+            return std::nullopt;
+        }
+
+        if (block_idx >= m_block_count) {
             Log::Error("read_block_spare: invalid block index {}", block_idx);
             return std::nullopt;
         }
@@ -209,7 +225,12 @@ namespace gxbuild3::utils {
 
     std::optional<std::vector<uint8_t>>
     FlashBlockDriver::read_lil_block_spare(uint32_t block_idx) const {
-        if (block_idx >= m_lil_block_count || m_image_data.empty()) {
+        if (m_page_length < 0x210 || m_image_data.empty()) {
+            Log::Error("read_lil_block_spare: spare not available");
+            return std::nullopt;
+        }
+
+        if (block_idx >= m_lil_block_count) {
             Log::Error("read_lil_block_spare: invalid lil block index {}", block_idx);
             return std::nullopt;
         }
@@ -284,9 +305,8 @@ namespace gxbuild3::utils {
         while (bytes_read < length) {
             const size_t bytes_to_read =
                 std::min(length - bytes_read, static_cast<size_t>(512 - off_in_page));
-            const size_t buffer_offset = curr_page * 512 - (curr_page > 0 ? (offset % 512) : 0);
-            const size_t image_offset =
-                page_in_image * m_page_length + curr_page * m_page_length + off_in_page;
+            const size_t buffer_offset = bytes_read;
+            const size_t image_offset = (page_in_image + curr_page) * m_page_length + off_in_page;
 
             if (image_offset + bytes_to_read > m_image_data.size()) {
                 Log::Error("read: buffer overrun");
@@ -305,7 +325,14 @@ namespace gxbuild3::utils {
     }
 
     bool FlashBlockDriver::write_page_spare(uint32_t page_idx, const uint8_t* spare_buff) {
-        if (page_idx >= m_page_count || m_image_data.empty()) {
+        if (m_page_length < 0x210 || m_image_data.empty()) {
+            Log::Error("write_page_spare: spare not available");
+            return false;
+        }
+
+        const uint32_t raw_page_count =
+            static_cast<uint32_t>(m_image_data.size() / m_page_length);
+        if (page_idx >= raw_page_count) {
             Log::Error("write_page_spare: invalid page index {}", page_idx);
             return false;
         }
@@ -321,7 +348,12 @@ namespace gxbuild3::utils {
     }
 
     bool FlashBlockDriver::write_block_spare(uint32_t block_idx, const uint8_t* spare_buff) {
-        if (block_idx >= m_block_count || m_image_data.empty()) {
+        if (m_page_length < 0x210 || m_image_data.empty()) {
+            Log::Error("write_block_spare: spare not available");
+            return false;
+        }
+
+        if (block_idx >= m_block_count) {
             Log::Error("write_block_spare: invalid block index {}", block_idx);
             return false;
         }
@@ -337,7 +369,12 @@ namespace gxbuild3::utils {
     }
 
     bool FlashBlockDriver::write_lil_block_spare(uint32_t block_idx, const uint8_t* spare_buff) {
-        if (block_idx >= m_lil_block_count || m_image_data.empty()) {
+        if (m_page_length < 0x210 || m_image_data.empty()) {
+            Log::Error("write_lil_block_spare: spare not available");
+            return false;
+        }
+
+        if (block_idx >= m_lil_block_count) {
             Log::Error("write_lil_block_spare: invalid lil block index {}", block_idx);
             return false;
         }
@@ -375,10 +412,8 @@ namespace gxbuild3::utils {
         while (bytes_written < length) {
             const size_t bytes_to_write =
                 std::min(length - bytes_written, static_cast<size_t>(512 - off_in_page));
-            const uint8_t* copy_from =
-                buffer + (curr_page * 512) - (curr_page > 0 ? (offset % 512) : 0);
-            const size_t image_offset =
-                page_in_image * m_page_length + curr_page * m_page_length + off_in_page;
+            const uint8_t* copy_from = buffer + bytes_written;
+            const size_t image_offset = (page_in_image + curr_page) * m_page_length + off_in_page;
 
             if (image_offset + bytes_to_write > m_image_data.size()) {
                 Log::Error("write: buffer overrun");
@@ -395,11 +430,17 @@ namespace gxbuild3::utils {
     }
 
     void FlashBlockDriver::init_spare() {
+        if (m_page_length < 0x210) {
+            return;
+        }
+
         uint8_t spare[0x10] = {0};
+        const uint32_t raw_page_count =
+            static_cast<uint32_t>(m_image_data.size() / m_page_length);
 
         // Initialize all pages with default spare data
         set_spare_bad_block(spare, false);
-        for (uint32_t i = 0; i < m_page_count; i++) {
+        for (uint32_t i = 0; i < raw_page_count; i++) {
             if (!write_page_spare(i, spare)) {
                 Log::Error("init_spare: failed to write page spare for page {}", i);
                 return;
@@ -596,7 +637,8 @@ namespace gxbuild3::utils {
 
     bool FlashBlockDriver::open_continue(size_t length, uint32_t page_length) {
         m_page_length = page_length;
-        m_image_length_real = length;
+        m_image_length_raw = length;
+        m_image_length_real = (length / page_length) * 512;
         m_spare_type = detect_spare_type();
 
         if (m_flash_config == 0) {
@@ -677,7 +719,8 @@ namespace gxbuild3::utils {
     bool FlashBlockDriver::create_defaults(size_t img_len, uint32_t page_len, SpareType spare_type,
                                            uint32_t flash_config, uint32_t fs_offset) {
         m_page_length = page_len;
-        m_image_length_real = img_len;
+        m_image_length_raw = img_len;
+        m_image_length_real = (img_len / page_len) * 512;
         m_image_data.resize(img_len, 0x00);
         m_spare_type = spare_type;
         m_flash_config = flash_config;
@@ -704,7 +747,14 @@ namespace gxbuild3::utils {
 
     std::optional<std::vector<uint8_t>> FlashBlockDriver::create_image(size_t length,
                                                                        uint32_t flash_config) {
-        m_image_data.resize(length);
+        const uint32_t page_len = (flash_config == FlashConfig::Corona4GB) ? 512 : 528;
+        const size_t page_count = (length / 512) + ((length % 512) != 0 ? 1 : 0);
+        const size_t raw_length = page_count * page_len;
+
+        m_image_data.assign(raw_length, 0x00);
+        m_page_length = page_len;
+        m_image_length_raw = raw_length;
+        m_image_length_real = page_count * 512;
         m_flash_config = flash_config;
 
         if (!load_flash_config()) {
@@ -729,11 +779,12 @@ namespace gxbuild3::utils {
     }
 
     bool FlashBlockDriver::save_image(const std::string& path) {
-        // Recalculate ECC for all pages before saving
-        for (uint32_t i = 0; i < m_page_count; i++) {
-            const size_t page_offset = i * 0x210;
-            if (page_offset + 0x210 <= m_image_data.size()) {
-                calculate_edc(reinterpret_cast<uint32_t*>(m_image_data.data() + page_offset));
+        if (m_page_length >= 0x210) {
+            for (uint32_t i = 0; i < m_page_count; i++) {
+                const size_t page_offset = static_cast<size_t>(i) * m_page_length;
+                if (page_offset + m_page_length <= m_image_data.size()) {
+                    calculate_edc(reinterpret_cast<uint32_t*>(m_image_data.data() + page_offset));
+                }
             }
         }
 

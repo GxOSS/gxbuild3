@@ -4,6 +4,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <array>
+#include <optional>
 #include <vector>
 
 // NOTE: This file is derived from InvoxiPlayGames's xenon-bltool.
@@ -78,7 +80,7 @@ typedef struct _bl2_header {
     uint8_t key[0x10]; // Per Box Digest?
     uint64_t padding_or_args[4];
     EXCRYPT_SIG signature; 
-    uint8_t globals[0x128]; // "find out whats in here" bro what?
+    uint8_t globals[0x128]; // "find out whats in here"
     EXCRYPT_RSAPUB_2048 devkit_pubkey; // RSA Pub Key
     uint8_t sc_key[0x10]; // nonce_3bl
     char sc_salt[10]; // salt_3bl
@@ -86,31 +88,32 @@ typedef struct _bl2_header {
     uint8_t cd_cbb_hash[0x14];  // CB_A has CB_B hash, CB_B has CD hash
     uint8_t more_globals[0x10]; // more_globals[1] has LDV
 } bl2_header;
-
-typedef struct _bl2_extra {
-    uint64_t post_output_addr;
-    uint64_t sb_flash_addr;
-    uint64_t soc_mmio_addr;
-    uint8_t console_allow[4];
-} bl2_extra;
 */
 
+typedef struct _bl2_metadata {
+    std::optional<uint16_t> b_flags;
+    std::optional<uint8_t> lockdown_value;
+    std::optional<std::array<uint8_t, 3>> pairing_data;
+    std::optional<std::array<uint8_t, 4>> console_allow;
+    std::optional<uint64_t> post_output_addr;
+    std::optional<uint64_t> sb_flash_addr;
+    std::optional<uint64_t> soc_mmio_addr;
+} bl2_metadata;
+
+
 typedef struct _bl2_header {
-    uint16_t b_flags;
-    uint8_t pairing_data[3];
-    uint8_t lockdown_value;
-    uint8_t reserved_per_box[0xC];
+    bl_header header;
     uint8_t per_box_digest[0x10];
+    uint64_t padding_or_args[4];
     EXCRYPT_SIG signature;
+    uint8_t globals[0x128];
     EXCRYPT_RSAPUB_2048 rsa_pub_key;
     uint8_t nonce_3bl[0x10];
     char salt_3bl[10];
     char salt_4bl[10];
     uint8_t digest[0x14]; // For CB_B or CD
-    uint64_t post_output_addr;
-    uint64_t sb_flash_addr;
-    uint64_t soc_mmio_addr;
-    uint8_t console_allow[4];
+    uint8_t more_globals[0x10];
+    uint8_t reserved_per_box[0xC];
 } bl2_header;
 
 

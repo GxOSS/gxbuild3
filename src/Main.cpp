@@ -329,7 +329,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         }
 
         Log::Info("Parsing NAND image...");
-        auto flash = FlashImage::parse(*nand_data);
+        auto flash = FlashImage::parse(std::move(*nand_data));
 
         const auto output_dir = args.output_dir.value_or(std::filesystem::current_path());
 
@@ -449,4 +449,5 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
     }
 
     return 0;
+    }
 }

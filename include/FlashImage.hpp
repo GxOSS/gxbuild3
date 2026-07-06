@@ -7,7 +7,11 @@
 #include "bootloaders/7bl.hpp"
 #include "bootloaders/Common.hpp"
 #include "bootloaders/FlashFileSystem.hpp"
+#include "utils/FlashBlockDriver.hpp"
 #include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <vector>
 
 // NAND Header structure based on NANDFS.md
 // Note: This appears to start with a bl_header (magic, version, pairing, flags, entrypoint, size)
@@ -81,6 +85,7 @@ typedef struct _payloads_t {
 } payloads_t;
 
 struct FlashImage {
+    gxbuild3::utils::FlashBlockDriver driver;
     raw_nand_header_t header;
     std::optional<std::vector<uint8_t>> cb_or_A;
     std::optional<std::vector<uint8_t>> cb_X;
@@ -101,7 +106,7 @@ struct FlashImage {
     std::optional<std::vector<gxbuild3::bootloaders::FlashMobileData>> mobile_data;
     std::optional<gxbuild3::bootloaders::XeCoronaFsData> corona_fs_data;
 
-    static flash_image_t parse(const std::vector<uint8_t>& data);
+    static FlashImage parse(std::vector<uint8_t> data);
 };
 
 typedef FlashImage flash_image_t;
@@ -114,6 +119,9 @@ typedef struct FlashImageMetadata {
 } flash_image_metadata_t;
 
 nand_results_t read(const std::vector<uint8_t>& data);
+
+// New function that uses FlashBlockDriver directly
+nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver);
 
 flash_image_t parse(const std::vector<uint8_t>& data);
 
