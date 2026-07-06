@@ -225,6 +225,19 @@ nand_results_t read(const std::vector<uint8_t>& data) {
     return read(static_cast<const gxbuild3::utils::FlashBlockDriver&>(driver));
 }
 
+raw_nand_header_t parse_nand_header(std::span<const uint8_t> raw) {
+    if (raw.size() < sizeof(raw_nand_header_t))
+        throw std::runtime_error("NAND header data too short");
+
+    raw_nand_header_t header{};
+    std::memcpy(&header, raw.data(), sizeof(raw_nand_header_t));
+
+    if (bswap16(header.magic) == 0)
+        throw std::runtime_error("Invalid NAND header magic");
+
+    return header;
+}
+
 FlashImage FlashImage::parse(std::vector<uint8_t> data) {
     FlashImage image{};
 
@@ -235,10 +248,12 @@ FlashImage FlashImage::parse(std::vector<uint8_t> data) {
     }
 
     auto header_data = image.driver.read(0, sizeof(raw_nand_header_t));
-    if (header_data) {
-        std::memcpy(&image.header, header_data->data(), sizeof(raw_nand_header_t));
-    }
+    if (!header_data)
+        throw std::runtime_error("Failed to read NAND header");
 
+    image.header = parse_nand_header(std::span<const uint8_t>(*header_data));
+
+    image.nand_results = read(image.driver);
     return image;
 }
 
@@ -262,7 +277,12 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
     std::filesystem::create_directories(output_dir);
 
     const auto& driver = flash.driver;
-    nand_results_t results = read(driver);
+    nand_results_t results{};
+    if (flash.nand_results) {
+        results = *flash.nand_results;
+    } else {
+        results = read(driver);
+    }
     if (!results.valid) {
         Log::Error("Extraction failed: invalid NAND");
         return false;

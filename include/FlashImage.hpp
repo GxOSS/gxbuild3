@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <vector>
 
 // NAND Header structure based on NANDFS.md
@@ -86,7 +87,8 @@ typedef struct _payloads_t {
 
 struct FlashImage {
     gxbuild3::utils::FlashBlockDriver driver;
-    raw_nand_header_t header;
+    raw_nand_header_t header{};
+    std::optional<nand_results_t> nand_results;
     std::optional<std::vector<uint8_t>> cb_or_A;
     std::optional<std::vector<uint8_t>> cb_X;
     std::optional<std::vector<uint8_t>> cb_B;
@@ -122,6 +124,8 @@ nand_results_t read(const std::vector<uint8_t>& data);
 
 // New function that uses FlashBlockDriver directly
 nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver);
+
+raw_nand_header_t parse_nand_header(std::span<const uint8_t> raw);
 
 flash_image_t parse(const std::vector<uint8_t>& data);
 

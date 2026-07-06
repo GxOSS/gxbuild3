@@ -329,7 +329,13 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         }
 
         Log::Info("Parsing NAND image...");
-        auto flash = FlashImage::parse(std::move(*nand_data));
+        flash_image_t flash;
+        try {
+            flash = FlashImage::parse(std::move(*nand_data));
+        } catch (const std::exception& ex) {
+            Log::Error("Failed to parse NAND: {}", ex.what());
+            return 1;
+        }
 
         const auto output_dir = args.output_dir.value_or(std::filesystem::current_path());
 
