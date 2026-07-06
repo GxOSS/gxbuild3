@@ -13,7 +13,7 @@
 using namespace gxbuild3::bootloaders;
 
 bl_type get_bl_type(uint16_t value) {
-    switch (value) {
+    switch (value & 0x0FFF) {
         case 0x342: return CB;
         case 0x343: return SC;
         case 0x344: return CD;
@@ -141,38 +141,35 @@ nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
         }
     }
     
-    // Parse CD (3BL)
     uint32_t next_offset = find_next_bl_offset(current_offset, current_size);
-    auto cd_result = read_bl_header(driver, next_offset);
-    if (cd_result) {
-        results.cd = *cd_result;
-        current_offset = results.cd.offset;
-        current_size = results.cd.size;
-        
-        // Parse CE (4BL)
-        next_offset = find_next_bl_offset(current_offset, current_size);
-        auto ce_result = read_bl_header(driver, next_offset);
-        if (ce_result) {
-            results.ce = *ce_result;
-            current_offset = results.ce->offset;
-            current_size = results.ce->size;
-            
-            // Parse CF (5BL)
-            next_offset = find_next_bl_offset(current_offset, current_size);
-            auto cf_result = read_bl_header(driver, next_offset);
-            if (cf_result) {
-                results.cf0 = *cf_result;
-                current_offset = results.cf0->offset;
-                current_size = results.cf0->size;
-                
-                // Parse CG (6BL)
-                next_offset = find_next_bl_offset(current_offset, current_size);
-                auto cg_result = read_bl_header(driver, next_offset);
-                if (cg_result) {
-                    results.cg0 = *cg_result;
-                }
-            }
+    for (size_t i = 0; i < 8; i++) {
+        auto next_result = read_bl_header(driver, next_offset);
+        if (!next_result)
+            break;
+
+        switch (get_bl_type(static_cast<uint16_t>(next_result->magic))) {
+            case SC:
+                results.sc = *next_result;
+                break;
+            case CD:
+                results.cd = *next_result;
+                break;
+            case CE:
+                results.ce = *next_result;
+                break;
+            case CF:
+                results.cf0 = *next_result;
+                break;
+            case CG:
+                results.cg0 = *next_result;
+                break;
+            default:
+                break;
         }
+
+        current_offset = next_result->offset;
+        current_size = next_result->size;
+        next_offset = find_next_bl_offset(current_offset, current_size);
     }
 
     // Also check CF from NAND header if we haven't found it yet
@@ -184,7 +181,8 @@ nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
             next_offset = find_next_bl_offset(results.cf0->offset, results.cf0->size);
             auto cg0_result = read_bl_header(driver, next_offset);
             if (cg0_result) {
-                results.cg0 = *cg0_result;
+                if (get_bl_type(static_cast<uint16_t>(cg0_result->magic)) == CG)
+                    results.cg0 = *cg0_result;
             }
         }
     }
@@ -296,7 +294,6 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
 
     uint8_t cb_key[16] = {};
     uint8_t cb_b_key[16] = {};
-    uint8_t ce_key[16] = {};
 
     auto cb_bytes = extract_region(results.cb_or_a.offset, results.cb_or_a.size);
     if (cb_bytes) {
@@ -341,96 +338,131 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
         }
     }
 
-    auto cd_bytes = extract_region(results.cd.offset, results.cd.size);
+    std::optional<std::vector<uint8_t>> sc_bytes;
+    if (results.sc) {
+        sc_bytes = extract_region(results.sc->offset, results.sc->size);
+    }
     uint8_t cd_key[16] = {};
-    if (cd_bytes) {
-        auto cd = BootloaderSc::parse(*cd_bytes);
+    if (sc_bytes) {
+        auto sc = BootloaderSc::parse(*sc_bytes);
         const uint8_t* active_cb_key = (cb_b_key[0] != 0) ? cb_b_key : cb_key;
         if (active_cb_key[0] != 0)
-            cd.decrypt(active_cb_key);
+            sc.decrypt(active_cb_key);
 
-        const auto cd_serialized = cd.serialize();
-        const std::string filename = cd.is_decrypted() ? "CD.bin" : "CD_enc.bin";
-        WriteFile(output_dir / filename, AsByteSpan(cd_serialized));
-        Log::Info("Extracted 3BL/SC: {} (v{})", filename, cd.header.header.header.version);
+        const auto sc_serialized = sc.serialize();
+        const std::string filename = sc.is_decrypted() ? "SC.bin" : "SC_enc.bin";
+        WriteFile(output_dir / filename, AsByteSpan(sc_serialized));
+        Log::Info("Extracted 3BL/SC: {} (v{})", filename, sc.header.header.version);
+    }
 
-        if (cd.is_decrypted())
-            ExCryptHmacSha(active_cb_key, 16, cd.header.header.key, 16, nullptr, 0, nullptr, 0,
-                           cd_key, 16);
+    uint8_t ce_key[16] = {};
+    uint8_t cg_hmac[16] = {};
+
+    if (results.cd) {
+        auto cd_bytes = extract_region(results.cd->offset, results.cd->size);
+        if (cd_bytes) {
+            auto cd = BootloaderCd::parse(*cd_bytes);
+            const uint8_t* active_cb_key = (cb_b_key[0] != 0) ? cb_b_key : cb_key;
+            if (active_cb_key[0] != 0)
+                cd.decrypt(active_cb_key, cpu_key_bytes.empty() ? nullptr : cpu_key_bytes.data());
+
+            const auto cd_serialized = cd.serialize();
+            const std::string filename = cd.is_decrypted() ? "CD.bin" : "CD_enc.bin";
+            WriteFile(output_dir / filename, AsByteSpan(cd_serialized));
+            Log::Info("Extracted 4BL/CD: {} (v{})", filename, cd.header.header.version);
+
+            if (active_cb_key[0] != 0) {
+                std::memcpy(cd_key, cd.header.rsa_pub_key, 16);
+                ExCryptHmacSha(active_cb_key, 16, cd_key, 16, nullptr, 0, nullptr, 0, cd_key, 16);
+                if (!cpu_key_bytes.empty()) {
+                    ExCryptHmacSha(cpu_key_bytes.data(), 16, cd_key, 16, nullptr, 0, nullptr, 0,
+                                   cd_key, 16);
+                }
+            }
+        }
     }
 
     if (results.ce) {
         auto ce_bytes = extract_region(results.ce->offset, results.ce->size);
         if (ce_bytes) {
-            auto ce = BootloaderCd::parse(*ce_bytes);
-            const uint8_t* active_cb_key = (cb_b_key[0] != 0) ? cb_b_key : cb_key;
-            if (active_cb_key[0] != 0)
-                ce.decrypt(active_cb_key, cpu_key_bytes.empty() ? nullptr : cpu_key_bytes.data());
+            auto ce = BootloaderCe::parse(*ce_bytes);
+            if (cd_key[0] != 0)
+                ce.decrypt(cd_key);
 
             const auto ce_serialized = ce.serialize();
             const std::string filename = ce.is_decrypted() ? "CE.bin" : "CE_enc.bin";
             WriteFile(output_dir / filename, AsByteSpan(ce_serialized));
-            Log::Info("Extracted 4BL/SD: {} (v{})", filename, ce.header.header.version);
+            Log::Info("Extracted 5BL/CE: {} (v{})", filename, ce.header.header.version);
 
             if (ce.is_decrypted())
-                ExCryptHmacSha(cpu_key_bytes.empty() ? active_cb_key : cpu_key_bytes.data(), 16,
-                               ce.header.rsa_pub_key, 16, nullptr, 0, nullptr, 0, ce_key, 16);
+                std::memcpy(ce_key, cd_key, 16);
         }
     }
 
+    std::optional<BootloaderCf> cf_slot0;
     if (results.cf0) {
         auto cf_bytes = extract_region(results.cf0->offset, results.cf0->size);
         if (cf_bytes) {
-            auto cf = BootloaderCe::parse(*cf_bytes);
-            if (ce_key[0] != 0)
-                cf.decrypt(ce_key);
+            auto cf = BootloaderCf::parse(*cf_bytes);
+            if (!bl_key_bytes.empty())
+                cf.decrypt(bl_key_bytes.data());
 
             const auto cf_serialized = cf.serialize();
             const std::string filename = cf.is_decrypted() ? "CF.bin" : "CF_enc.bin";
             WriteFile(output_dir / filename, AsByteSpan(cf_serialized));
-            Log::Info("Extracted 5BL/SE: {} (v{})", filename, cf.header.header.version);
+            Log::Info("Extracted 6BL/CF: {} (v{})", filename, cf.header.header.version);
+
+            if (cf.is_decrypted())
+                cf_slot0 = cf;
         }
+    }
+
+    if (cf_slot0) {
+        std::memcpy(cg_hmac, cf_slot0->header.cg_hmac, 16);
     }
 
     if (results.cg0) {
         auto cg_bytes = extract_region(results.cg0->offset, results.cg0->size);
         if (cg_bytes) {
-            auto cg = BootloaderCf::parse(*cg_bytes);
-            if (!bl_key_bytes.empty())
-                cg.decrypt(bl_key_bytes.data());
+            auto cg = BootloaderCg::parse(*cg_bytes);
+            if (cg_hmac[0] != 0)
+                cg.decrypt(cg_hmac);
 
             const auto cg_serialized = cg.serialize();
             const std::string filename = cg.is_decrypted() ? "CG.bin" : "CG_enc.bin";
             WriteFile(output_dir / filename, AsByteSpan(cg_serialized));
-            Log::Info("Extracted 6BL/SF: {} (v{})", filename, cg.header.header.version);
+            Log::Info("Extracted 7BL/CG: {} (v{})", filename, cg.header.header.version);
         }
     }
 
     if (results.cf1) {
         auto cf_bytes = extract_region(results.cf1->offset, results.cf1->size);
         if (cf_bytes) {
-            auto cf = BootloaderCe::parse(*cf_bytes);
-            if (ce_key[0] != 0)
-                cf.decrypt(ce_key);
+            auto cf = BootloaderCf::parse(*cf_bytes);
+            if (!bl_key_bytes.empty())
+                cf.decrypt(bl_key_bytes.data());
 
             const auto cf_serialized = cf.serialize();
             const std::string filename = cf.is_decrypted() ? "CF_slot1.bin" : "CF_slot1_enc.bin";
             WriteFile(output_dir / filename, AsByteSpan(cf_serialized));
-            Log::Info("Extracted 5BL/SE Slot 1: {} (v{})", filename, cf.header.header.version);
+            Log::Info("Extracted 6BL/CF Slot 1: {} (v{})", filename, cf.header.header.version);
+
+            if (cf.is_decrypted())
+                std::memcpy(cg_hmac, cf.header.cg_hmac, 16);
         }
     }
 
     if (results.cg1) {
         auto cg_bytes = extract_region(results.cg1->offset, results.cg1->size);
         if (cg_bytes) {
-            auto cg = BootloaderCf::parse(*cg_bytes);
-            if (!bl_key_bytes.empty())
-                cg.decrypt(bl_key_bytes.data());
+            auto cg = BootloaderCg::parse(*cg_bytes);
+            if (cg_hmac[0] != 0)
+                cg.decrypt(cg_hmac);
 
             const auto cg_serialized = cg.serialize();
             const std::string filename = cg.is_decrypted() ? "CG_slot1.bin" : "CG_slot1_enc.bin";
             WriteFile(output_dir / filename, AsByteSpan(cg_serialized));
-            Log::Info("Extracted 6BL/SF Slot 1: {} (v{})", filename, cg.header.header.version);
+            Log::Info("Extracted 7BL/CG Slot 1: {} (v{})", filename, cg.header.header.version);
         }
     }
 

@@ -21,7 +21,7 @@ BootloaderCg BootloaderCg::parse(const std::vector<uint8_t>& bytes) {
     return cg;
 }
 
-void BootloaderCg::decrypt(const uint8_t cpu_or_onebl_key[16]) {
+void BootloaderCg::decrypt(const uint8_t cg_hmac[16]) {
     uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
     size_t payload_len = size_aligned - sizeof(bl_header);
     
@@ -29,7 +29,7 @@ void BootloaderCg::decrypt(const uint8_t cpu_or_onebl_key[16]) {
         throw std::runtime_error("CG/7BL payload too short");
     
     uint8_t derived_key[16];
-    ExCryptHmacSha(cpu_or_onebl_key, 16, header.key, 16, nullptr, 0, nullptr, 0, derived_key, 16);
+    ExCryptHmacSha(cg_hmac, 16, header.key, 16, nullptr, 0, nullptr, 0, derived_key, 16);
     
     // Decrypt everything after the first 0x20 bytes (bl_header + key)
     std::vector<uint8_t> temp;

@@ -50,7 +50,8 @@ typedef struct NandResults {
     bl_results_t cb_or_a;
     std::optional<bl_results_t> cbx;
     std::optional<bl_results_t> cbb;
-    bl_results_t cd;
+    std::optional<bl_results_t> sc;
+    std::optional<bl_results_t> cd;
     std::optional<bl_results_t> ce;
     // patchslot 0
     std::optional<bl_results_t> cf0;
