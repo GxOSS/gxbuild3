@@ -352,44 +352,17 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
     std::optional<Ini::Document> build_doc;
     {
         std::filesystem::path ini_dir = args.data_dir.value_or(std::filesystem::current_path());
+        std::filesystem::path ini_path = ini_dir / (build_type_str + ".ini");
 
-        std::string ini_name;
-        if (args.ini_ext) {
-            ini_name = *args.ini_ext;
-        } else if (args.console) {
-            static const std::map<ConsoleType, std::string> kConsoleIniName = {
-                {ConsoleType::Xenon, "xenon"},
-                {ConsoleType::Zephyr, "zephyr"},
-                {ConsoleType::Falcon, "falcon"},
-                {ConsoleType::Jasper, "jasper"},
-                {ConsoleType::JasperBB, "jasperbb"},
-                {ConsoleType::JasperBigFFS, "jasperbigffs"},
-                {ConsoleType::Trinity, "trinity"},
-                {ConsoleType::TrinityBB, "trinitybb"},
-                {ConsoleType::TrinityBigFFS, "trinitybigffs"},
-                {ConsoleType::Corona, "corona"},
-                {ConsoleType::Corona4G, "corona4g"},
-                {ConsoleType::Winchester, "winchester"},
-                {ConsoleType::Winchester4G, "winchester4g"},
-            };
-            auto it = kConsoleIniName.find(*args.console);
-            if (it != kConsoleIniName.end())
-                ini_name = it->second;
+        auto res = Ini::ParseFile(ini_path);
+        if (!res) {
+            Log::Error("Failed to load build INI '{}': {}", ini_path.string(),
+                       Ini::ParseErrorString(res.error()));
+            return 1;
         }
-
-        if (!ini_name.empty()) {
-            std::filesystem::path ini_path = ini_dir / (ini_name + ".ini");
-            auto res = Ini::ParseFile(ini_path);
-            if (!res) {
-                Log::Error("Failed to load build INI '{}': {}", ini_path.string(),
-                           Ini::ParseErrorString(res.error()));
-                return 1;
-            }
-            build_doc = std::move(*res);
-            Log::Info("Loaded build INI: {}", ini_path.string());
-        } else {
-            Log::Warn("No console type or INI extension specified, skipping build INI load");
-        }
+        
+        build_doc = std::move(*res);
+        Log::Info("Loaded build INI: {}", ini_path.string());
     }
 
     if (!bl_key_bytes.empty() && build_doc) {
@@ -418,7 +391,78 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 section_name = it->second + "bl";
         }
 
+
+        std::filesystem::path patches_dir =  args.data_dir / "bin";
+        std::filesystem::path patch;
+        std::string g1_model = switch (args.console->string()) {
+            case "xenon" || "elpis" || "zephyr" || "falcon" || "opus" || "jasper" || "jasperbb" || "jasperbigffs" || "tonasket":
+                return "phat";
+            case "trinity" || "trinitybb" || "trinitybigffs" || "corona" || "corona4g" || "winchester" || "winchester4g":
+                return "trinity";
+            default:
+                return args.console->string();
+        };
+
+        std::string patch_mobo = args.console->string() + ("_" + args.bl_ext->string()).value_or("");
+
+        switch (build_type_str) {
+            case "retail":
+                break;
+            case "glitch":
+                patch = patches_dir / "patches_" + g1_model + ".bin";
+                break;
+            case "glitch2":
+                patch = patches_dir / "patches_g2" + patch_mobo + ".bin";
+                break;
+            case "glitch2m":
+                patch = patches_dir / "patches_g2m" + patch_mobo + ".bin";
+                break;
+            case "glitch3":
+                patch = patches_dir / "patches_g3" + patch_mobo + ".bin";
+                break;
+            case "jtag":
+                patch = patches_dir / "patches_" + patch_mobo + ".bin";
+                break;
+            case "devkit":
+                break;
+            case "devgl":
+                patch = patches_dir / "patches_g2m" + patch_mobo + ".bin";
+                break;
+            default:
+                Log::Error("Unknown build type: {}", build_type_str);
+                return 1;
+                break;
+        }
+
+        if (!patch.empty()) {
+            auto patch_data = ReadFile(patch);
+            if (!patch_data) {
+                Log::Error("Failed to read patch file: {}", patch.string());
+                return 1;
+            }
+        }
+
+        if (!args.source_nand.empty()) {
+            std::filesystem::path source_nand_path = args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path()));
+            source_nand_path /= args.source_nand;
+            auto source_nand_data = ReadFile(source_nand_path);
+            if (!source_nand_data) {
+                Log::Error("Failed to read source NAND file: {}", source_nand_path.string());
+                return 1;
+            }
+
+            
+        }
+
         const Ini::Section* main_sec = build_doc->get(section_name);
+        const Ini::Section* sec_sec = build_doc->get("security");
+        const Ini::Section* flashfs_sec = build_doc->get("flashfs");
+        const Ini::Section* payloads_sec = build_doc->get("payloads");
+
+        if (sec_sec) {
+        }
+
+
         if (main_sec) {
             for (const auto& entry : *main_sec) {
                 std::string key_lower = entry.key;
@@ -453,6 +497,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             Log::Warn("Section '{}' not found in build INI", section_name);
         }
     }
+
+    if (args.)
 
     return 0;
     }

@@ -12,6 +12,58 @@
 
 using namespace gxbuild3::bootloaders;
 
+namespace {
+
+bool has_spare_data(const gxbuild3::utils::FlashBlockDriver& driver) {
+    return driver.page_length() >= 0x210;
+}
+
+bool is_flashfs_root_block_type(uint8_t block_type) {
+    return block_type == 0x30 || block_type == 0x2C;
+}
+
+std::optional<uint32_t> detect_flashfs_offset_from_spare(
+    const gxbuild3::utils::FlashBlockDriver& driver) {
+    if (!has_spare_data(driver)) {
+        return std::nullopt;
+    }
+
+    struct FlashFsRootCandidate {
+        uint32_t block_idx;
+        uint32_t sequence;
+    };
+
+    std::optional<FlashFsRootCandidate> best_root;
+
+    for (uint32_t block_idx = 0; block_idx < driver.lil_block_count(); ++block_idx) {
+        auto spare = driver.read_lil_block_spare(block_idx);
+        if (!spare) {
+            continue;
+        }
+
+        const uint8_t* spare_data = spare->data();
+        const uint32_t sequence = driver.get_spare_seq_field(spare_data);
+        const uint8_t block_type = driver.get_spare_block_type_field(spare_data);
+
+        if (sequence == 0 || !is_flashfs_root_block_type(block_type)) {
+            continue;
+        }
+
+        if (!best_root || sequence > best_root->sequence ||
+            (sequence == best_root->sequence && block_idx > best_root->block_idx)) {
+            best_root = FlashFsRootCandidate{.block_idx = block_idx, .sequence = sequence};
+        }
+    }
+
+    if (!best_root) {
+        return std::nullopt;
+    }
+
+    return best_root->block_idx * driver.lil_block_length();
+}
+
+} // namespace
+
 bl_type get_bl_type(uint16_t value) {
     switch (value & 0x0FFF) {
         case 0x342: return CB;
@@ -100,6 +152,12 @@ nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
     results.fs_offset = bswap32(header->fs_offset);
     results.payload_indicator = bswap32(header->payload_indicator);
     results.patch_slots = bswap16(header->patch_slots);
+
+    if (auto detected_fs_offset = detect_flashfs_offset_from_spare(driver)) {
+        Log::Info("Detected FlashFS from spare data at 0x{:x} (header hint: 0x{:x})",
+                  *detected_fs_offset, results.fs_offset);
+        results.fs_offset = *detected_fs_offset;
+    }
     
     // Parse CB (2BL) offset
     // entrypoint at 0x08 serves as the CB offset

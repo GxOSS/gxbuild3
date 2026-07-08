@@ -14,7 +14,8 @@ namespace gxbuild3::utils {
         SmallBlock = 0,
         BigBlockOnSmall = 1,
         BigBlock = 2,
-        Corona4GB = 3
+        Corona4GB = 3,
+        OldSmallBlock = 4
     };
 
     /// @brief Flash configuration constants
