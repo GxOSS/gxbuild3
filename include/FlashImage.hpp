@@ -45,6 +45,26 @@ typedef struct BlResults {
     uint32_t magic;
 } bl_results_t;
 
+typedef struct MobileResult {
+    char name;
+    uint32_t data_sequence;
+    uint32_t start_page;
+    uint32_t page_count;
+} mobile_result_t;
+
+typedef struct MobileResults {
+    std::optional<mobile_result_t> a;
+    std::optional<mobile_result_t> b;
+    std::optional<mobile_result_t> c;
+    std::optional<mobile_result_t> d;
+    std::optional<mobile_result_t> e;
+    std::optional<mobile_result_t> f;
+    std::optional<mobile_result_t> g;
+    std::optional<mobile_result_t> h;
+    std::optional<mobile_result_t> i;
+    std::optional<mobile_result_t> j;
+} mobile_results_t;
+
 typedef struct NandResults {
     bool valid;
     bl_results_t cb_or_a;
@@ -65,6 +85,8 @@ typedef struct NandResults {
     uint32_t smc_offset;
     uint32_t smc_config_offset;
     uint32_t fs_offset;
+    std::optional<uint16_t> fs_block_idx;
+    std::optional<mobile_results_t> mobile_results;
     uint32_t payload_indicator;
     uint16_t patch_slots;
 } nand_results_t;
@@ -86,6 +108,27 @@ typedef struct _payloads_t {
     std::optional<uint8_t> vfuses;
 } payloads_t;
 
+typedef struct MobileData {
+    std::optional<std::vector<uint8_t>> a;
+    std::optional<std::vector<uint8_t>> b;
+    std::optional<std::vector<uint8_t>> c;
+    std::optional<std::vector<uint8_t>> d;
+    std::optional<std::vector<uint8_t>> e;
+    std::optional<std::vector<uint8_t>> f;
+    std::optional<std::vector<uint8_t>> g;
+    std::optional<std::vector<uint8_t>> h;
+    std::optional<std::vector<uint8_t>> i;
+    std::optional<std::vector<uint8_t>> j;
+} mobile_data_t;
+
+typedef struct _flashfs_files_t {
+    std::optional<std::vector<uint8_t>> crl;
+    std::optional<std::vector<uint8_t>> dae;
+    std::optional<std::vector<uint8_t>> extended;
+    std::optional<std::vector<uint8_t>> fcrt;
+    std::optional<std::vector<uint8_t>> secdata;
+} flashfs_files_t;
+
 struct FlashImage {
     gxbuild3::utils::FlashBlockDriver driver;
     raw_nand_header_t header{};
@@ -105,8 +148,9 @@ struct FlashImage {
     std::optional<xellblock_t> xellblock;
     std::optional<payloads_t> payloads;
     
+    std::optional<mobile_data_t> mobile_data;
     std::optional<gxbuild3::bootloaders::FlashFileSystem> filesystem;
-    std::optional<std::vector<gxbuild3::bootloaders::FlashMobileData>> mobile_data;
+    std::optional<flashfs_files_t> flashfs_files;
     std::optional<gxbuild3::bootloaders::XeCoronaFsData> corona_fs_data;
 
     static FlashImage parse(std::vector<uint8_t> data);

@@ -13,6 +13,17 @@
 
 namespace gxbuild3::bootloaders {
 
+    namespace {
+
+        uint32_t ceil_div_u32(uint32_t value, uint32_t divisor) {
+            if (divisor == 0) {
+                return 0;
+            }
+            return value / divisor + ((value % divisor) != 0 ? 1U : 0U);
+        }
+
+    } // namespace
+
     // Construction and initialization
 
     FlashFileSystem::FlashFileSystem(
@@ -28,6 +39,52 @@ namespace gxbuild3::bootloaders {
         : m_block_driver(std::move(block_driver)), m_corona_data(std::move(corona_data)),
           m_version(0), m_start_block_idx(0) {
         Log::Trace("FlashFileSystem: constructed with block driver and corona data");
+    }
+
+    bool FlashFileSystem::create_defaults(uint16_t block_idx, uint32_t version,
+                                          uint32_t sys_update_addr,
+                                          bool reserve_config_blocks) {
+        if (!m_block_driver) {
+            Log::Error("create_defaults: no block driver available");
+            return false;
+        }
+
+        const uint32_t lil_block_count = m_block_driver->lil_block_count();
+        const uint32_t lil_block_length = m_block_driver->lil_block_length();
+        if (lil_block_count == 0 || lil_block_length == 0 || block_idx >= lil_block_count) {
+            Log::Error("create_defaults: invalid filesystem geometry or root block 0x{:x}",
+                       block_idx);
+            return false;
+        }
+
+        m_start_block_idx = block_idx;
+        m_version = version;
+        m_entries.clear();
+        m_blockmap.assign(lil_block_count, 0x1ffe);
+        m_blockmap[block_idx] = 0x1fff;
+
+        // Match RGBuild's CreateDefaults(): reserve everything up to the block after CG.
+        const uint32_t fs_start_block =
+            ceil_div_u32(sys_update_addr + 0x20000U, lil_block_length);
+        for (uint32_t i = 0; i < std::min(fs_start_block, lil_block_count); ++i) {
+            m_blockmap[i] = 0x1ffb;
+        }
+
+        if (reserve_config_blocks) {
+            const uint32_t config_block_idx = m_block_driver->config_block_idx();
+            if (config_block_idx < lil_block_count) {
+                for (uint32_t i = 0; i < 5 && (config_block_idx + i) < lil_block_count; ++i) {
+                    m_blockmap[config_block_idx + i] = 0x1ffb;
+                }
+            }
+        }
+
+        if (m_corona_data) {
+            m_corona_data->fs_version = version;
+            m_corona_data->fs_block_idx = block_idx;
+        }
+
+        return true;
     }
 
     // Chain management

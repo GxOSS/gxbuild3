@@ -5,8 +5,10 @@
 #include "bootloaders/Keyvault.hpp"
 #include "bootloaders/SMC.hpp"
 #include "utils/FlashBlockDriver.hpp"
+#include <array>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <span>
 #include <stdexcept>
 
@@ -22,16 +24,31 @@ bool is_flashfs_root_block_type(uint8_t block_type) {
     return block_type == 0x30 || block_type == 0x2C;
 }
 
-std::optional<uint32_t> detect_flashfs_offset_from_spare(
+struct FlashFsRootCandidate {
+    uint32_t block_idx;
+    uint32_t sequence;
+};
+
+std::optional<uint16_t> fs_offset_to_block_idx(const gxbuild3::utils::FlashBlockDriver& driver,
+                                               uint32_t fs_offset) {
+    const uint32_t lil_block_length = driver.lil_block_length();
+    if (lil_block_length == 0 || (fs_offset % lil_block_length) != 0) {
+        return std::nullopt;
+    }
+
+    const uint32_t block_idx = fs_offset / lil_block_length;
+    if (block_idx >= driver.lil_block_count() || block_idx > std::numeric_limits<uint16_t>::max()) {
+        return std::nullopt;
+    }
+
+    return static_cast<uint16_t>(block_idx);
+}
+
+std::optional<FlashFsRootCandidate> detect_flashfs_root_from_spare(
     const gxbuild3::utils::FlashBlockDriver& driver) {
     if (!has_spare_data(driver)) {
         return std::nullopt;
     }
-
-    struct FlashFsRootCandidate {
-        uint32_t block_idx;
-        uint32_t sequence;
-    };
 
     std::optional<FlashFsRootCandidate> best_root;
 
@@ -59,7 +76,38 @@ std::optional<uint32_t> detect_flashfs_offset_from_spare(
         return std::nullopt;
     }
 
-    return best_root->block_idx * driver.lil_block_length();
+    return best_root;
+}
+
+void load_known_flashfs_files(const gxbuild3::bootloaders::FlashFileSystem& filesystem,
+                              flashfs_files_t& files) {
+    struct FlashFsFileBinding {
+        std::string_view filename;
+        std::optional<std::vector<uint8_t>> flashfs_files_t::*target;
+    };
+
+    static constexpr std::array<FlashFsFileBinding, 5> kBindings = {{
+        {"crl.bin", &flashfs_files_t::crl},
+        {"dae.bin", &flashfs_files_t::dae},
+        {"extended.bin", &flashfs_files_t::extended},
+        {"fcrt.bin", &flashfs_files_t::fcrt},
+        {"secdata.bin", &flashfs_files_t::secdata},
+    }};
+
+    for (const auto& binding : kBindings) {
+        const auto* entry = filesystem.find_file(binding.filename);
+        if (!entry) {
+            continue;
+        }
+
+        auto data = filesystem.get_file_data(*entry);
+        if (!data) {
+            Log::Warn("Failed to read FlashFS file '{}'", binding.filename);
+            continue;
+        }
+
+        files.*(binding.target) = std::move(*data);
+    }
 }
 
 } // namespace
@@ -153,10 +201,14 @@ nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
     results.payload_indicator = bswap32(header->payload_indicator);
     results.patch_slots = bswap16(header->patch_slots);
 
-    if (auto detected_fs_offset = detect_flashfs_offset_from_spare(driver)) {
+    if (auto detected_root = detect_flashfs_root_from_spare(driver)) {
+        const uint32_t detected_fs_offset = detected_root->block_idx * driver.lil_block_length();
         Log::Info("Detected FlashFS from spare data at 0x{:x} (header hint: 0x{:x})",
-                  *detected_fs_offset, results.fs_offset);
-        results.fs_offset = *detected_fs_offset;
+                  detected_fs_offset, results.fs_offset);
+        results.fs_offset = detected_fs_offset;
+        results.fs_block_idx = static_cast<uint16_t>(detected_root->block_idx);
+    } else {
+        results.fs_block_idx = fs_offset_to_block_idx(driver, results.fs_offset);
     }
     
     // Parse CB (2BL) offset
@@ -310,6 +362,20 @@ FlashImage FlashImage::parse(std::vector<uint8_t> data) {
     image.header = parse_nand_header(std::span<const uint8_t>(*header_data));
 
     image.nand_results = read(image.driver);
+
+    if (image.nand_results && image.nand_results->fs_block_idx) {
+        auto fs_driver = std::make_shared<gxbuild3::utils::FlashBlockDriver>(image.driver);
+        gxbuild3::bootloaders::FlashFileSystem filesystem(fs_driver);
+        if (filesystem.load(*image.nand_results->fs_block_idx)) {
+            image.flashfs_files = flashfs_files_t{};
+            load_known_flashfs_files(filesystem, *image.flashfs_files);
+            image.filesystem = std::move(filesystem);
+        } else {
+            Log::Warn("FlashImage::parse: Failed to load FlashFS at block 0x{:x}",
+                      *image.nand_results->fs_block_idx);
+        }
+    }
+
     return image;
 }
 

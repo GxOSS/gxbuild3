@@ -39,14 +39,6 @@ namespace gxbuild3::bootloaders {
         }
     };
 
-    /// @brief Mobile data structure for flash filesystem
-    struct FlashMobileData {
-        uint8_t data_type{};       // Type of mobile data
-        uint32_t data_sequence{};  // Sequence number
-        uint32_t page{};           // Page number
-        std::vector<uint8_t> data; // Data buffer
-    };
-
     /// @brief Corona filesystem data structure
     struct XeCoronaFsData {
         uint8_t section_digest[0x14]{}; // Digest of all the data
@@ -83,6 +75,15 @@ namespace gxbuild3::bootloaders {
         /// @param corona_data Optional Corona filesystem data
         explicit FlashFileSystem(std::shared_ptr<gxbuild3::utils::FlashBlockDriver> block_driver,
                                  std::shared_ptr<XeCoronaFsData> corona_data);
+
+        /// @brief Initialize a fresh filesystem layout similar to RGBuild's CreateDefaults()
+        /// @param block_idx Root filesystem block index
+        /// @param version Filesystem version / sequence
+        /// @param sys_update_addr SysUpdateAddress from the NAND header
+        /// @param reserve_config_blocks Whether to reserve the 5 config blocks
+        /// @return true on success, false on invalid parameters
+        bool create_defaults(uint16_t block_idx, uint32_t version, uint32_t sys_update_addr,
+                             bool reserve_config_blocks = false);
 
         // Chain management
 

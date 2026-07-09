@@ -2,9 +2,24 @@
 
 C++ 23 Cross-Platform Xbox 360 Image Builder, Patcher and Extractor
 
+## Progress
+
+[X] INI Reading
+[X] NAND Parsing
+[X] NAND Building
+[X] STFS Parsing
+[ ] Crypto
+[X] Bootloader Patching
+[X] SMC Patching
+[X] SMC Config Patching
+[ ] Keyvault Patching
+[X] Filesystem Parsing
+[X] Filesystem Building
+[X] Mobile Support
+[ ] UI / UX
+
 
 ## Credits
-**Direct Code**
 * erorn - Project Base, STFS, XConfig
 * ExposureMG - Bootloaders, Patchers, and NAND parsing / building
 * emoose - Filesystems, FlashBlockDriver and Keyvault
