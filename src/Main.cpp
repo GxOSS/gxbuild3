@@ -278,7 +278,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         Log::Info("1BL key accepted");
     }
 
-    Ini::OptionsIni options{};
+    OptionsArgs options{};
     {
         std::filesystem::path opts_path =
             args.data_dir ? (*args.data_dir / "options.ini") : std::filesystem::path("options.ini");
@@ -299,21 +299,26 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         } else {
             options = std::move(*opts_res);
             Log::Info("Loaded options.ini");
+        }
+    }
 
-            if (cpu_key_bytes.empty() && !options.keys.cpukey.empty()) {
-                auto parsed = HexToBytes(options.keys.cpukey);
-                if (parsed && parsed->size() == 16 && cpukey_valid(*parsed)) {
-                    cpu_key_bytes = std::move(*parsed);
-                    Log::Info("CPU key loaded from options.ini");
-                }
-            }
-            if (bl_key_bytes.empty() && !options.keys.key_1bl.empty()) {
-                auto parsed = HexToBytes(options.keys.key_1bl);
-                if (parsed && parsed->size() == 16) {
-                    bl_key_bytes = std::move(*parsed);
-                    Log::Info("1BL key loaded from options.ini");
-                }
-            }
+    for (const auto& [key, value] : args.options) {
+        Ini::ApplyOption(options, key, value);
+    }
+
+    if (cpu_key_bytes.empty() && options.cpukey) {
+        auto parsed = HexToBytes(*options.cpukey);
+        if (parsed && parsed->size() == 16 && cpukey_valid(*parsed)) {
+            cpu_key_bytes = std::move(*parsed);
+            Log::Info("CPU key loaded from merged options");
+        }
+    }
+    if (bl_key_bytes.empty() && options.key_1bl) {
+        auto parsed = HexToBytes(*options.key_1bl);
+        if (parsed && parsed->size() == 16) {
+            bl_key_bytes = std::move(*parsed);
+            Log::Info("1BL key loaded from merged options");
+        }
     }
 
     if (args.mode == "extract") {
@@ -406,7 +411,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         std::string patch_mobo = args.console->string() + ("_" + args.bl_ext->string()).value_or("");
 
         switch (build_type_str) {
-            case "retail":
+            case "retail" || "devkit":
                 break;
             case "glitch":
                 patch = patches_dir / "patches_" + g1_model + ".bin";
@@ -414,7 +419,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             case "glitch2":
                 patch = patches_dir / "patches_g2" + patch_mobo + ".bin";
                 break;
-            case "glitch2m":
+            case "glitch2m" || "devgl":
                 patch = patches_dir / "patches_g2m" + patch_mobo + ".bin";
                 break;
             case "glitch3":
@@ -422,11 +427,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 break;
             case "jtag":
                 patch = patches_dir / "patches_" + patch_mobo + ".bin";
-                break;
-            case "devkit":
-                break;
-            case "devgl":
-                patch = patches_dir / "patches_g2m" + patch_mobo + ".bin";
                 break;
             default:
                 Log::Error("Unknown build type: {}", build_type_str);
@@ -442,6 +442,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             }
         }
 
+        flash_image_t new_nand{};
+
         if (!args.source_nand.empty()) {
             std::filesystem::path source_nand_path = args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path()));
             source_nand_path /= args.source_nand;
@@ -450,7 +452,14 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 Log::Error("Failed to read source NAND file: {}", source_nand_path.string());
                 return 1;
             }
-
+            flash_image_t donor_nand = FlashImage::parse(*source_nand_data);
+            if (!donor_nand.valid) {
+                Log::Error("Failed to parse source NAND file: {}", source_nand_path.string());
+                return 1;
+            }
+            new_nand.keyvault = donor_nand.keyvault;
+            new_nand.smc_config = donor_nand.smc_config;
+            new_nand.flashfs_files = donor_nand.flashfs_files;
             
         }
 

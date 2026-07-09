@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Args.hpp"
+
 #include <array>
 #include <expected>
 #include <filesystem>
@@ -66,98 +68,11 @@ namespace Ini {
         return "Unknown";
     }
 
-    struct GxBuildKeys {
-        std::string ctype;
-        std::string key_1bl;
-        std::string cpukey;
-        std::string cfldv;
-    };
+    void ApplyOption(OptionsArgs& options, std::string_view key, std::string_view value);
 
-    struct CoreOptions {
-        std::optional<bool> noenter;
-        std::optional<bool> nolog;
-        std::optional<bool> noinfo;
-        std::optional<bool> gxunsafe;
-        std::optional<bool> verbose;
-    };
+    [[nodiscard]] std::expected<OptionsArgs, OptionsError> ParseOptionsIni(std::string_view content);
 
-    struct CoreBuilderOptions {
-        std::optional<bool> nosecurity;
-        std::optional<bool> nosusecurity;
-        std::optional<bool> noremap;
-        std::optional<bool> nandmu;
-        std::optional<bool> nochainpatch;
-        std::optional<bool> nofcrt;
-        std::optional<bool> dualpatchslots;
-        std::optional<bool> mfg;
-        std::optional<bool> xsb;
-        std::optional<bool> nomobile;
-        std::optional<bool> full_image;
-        std::optional<bool> noecc;
-        std::optional<bool> bigblock;
-    };
-
-    struct BuilderOptions {
-        std::optional<bool> gxunsafe;
-        std::optional<bool> verbose;
-        std::optional<bool> noflashfs;
-        std::optional<bool> noecdremap;
-        std::optional<bool> smcnocheck;
-        std::string xellbutton;
-        std::string xellbutton2;
-    };
-
-    struct JtagOptions {
-        std::optional<uint16_t> syscall;
-        std::optional<std::array<uint8_t, 3>> pairing_2bl;
-        std::optional<bool> cygnos;
-        std::optional<bool> demon;
-        std::optional<bool> smcnoeject;
-        std::optional<bool> smcnoblink;
-        std::optional<bool> patchsmc;
-        std::optional<bool> olddvd;
-        std::optional<bool> nodvd;
-        std::optional<bool> dualboot;
-    };
-
-    struct SmcConfigOptions {
-        std::string cputemp;
-        std::string gputemp;
-        std::string edramtemp;
-        std::string overcputemp;
-        std::string overgputemp;
-        std::string overedramtemp;
-        std::string cpufan;
-        std::string gpufan;
-    };
-
-    struct KeyvaultOptions {
-        std::string avregion;
-        std::string gameregion;
-        std::string dvdregion;
-        std::string macid;
-        std::string serial;
-        std::string consoleid;
-        std::string osig;
-        std::string mfdate;
-        std::string dvdkey;
-    };
-
-    struct OptionsIni {
-        GxBuildKeys keys;
-        CoreOptions core;
-        CoreBuilderOptions core_builder;
-        BuilderOptions builder;
-        JtagOptions jtag;
-        SmcConfigOptions smc_config;
-        KeyvaultOptions keyvault;
-
-        void Merge(const OptionsIni& other);
-    };
-
-    [[nodiscard]] std::expected<OptionsIni, OptionsError> ParseOptionsIni(std::string_view content);
-
-    using OptionsResult = std::expected<OptionsIni, std::variant<ParseError, OptionsError>>;
+    using OptionsResult = std::expected<OptionsArgs, std::variant<ParseError, OptionsError>>;
     [[nodiscard]] OptionsResult ParseOptionsIniFile(const std::filesystem::path& path);
 
 } // namespace Ini

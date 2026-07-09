@@ -152,83 +152,97 @@ namespace Ini {
 
     } // namespace
 
-    void OptionsIni::Merge(const OptionsIni& o) {
-#define MERGE_OPT(field)                                                                           \
-    if (o.field.has_value())                                                                       \
-    field = o.field
-#define MERGE_STR(field)                                                                           \
-    if (!o.field.empty())                                                                          \
-    field = o.field
+    void ApplyOption(OptionsArgs& opt, std::string_view key_sv, std::string_view value_sv) {
+        const std::string key = ToLower(std::string(Trim(key_sv)));
+        const std::string value{Trim(value_sv)};
+        const bool b = ParseBool(Trim(value_sv));
 
-        MERGE_STR(keys.ctype);
-        MERGE_STR(keys.key_1bl);
-        MERGE_STR(keys.cpukey);
-        MERGE_STR(keys.cfldv);
+        if (key == "type")
+            opt.type = value;
+        else if (key == "rev")
+            opt.rev = value;
+        else if (key == "1blkey")
+            opt.key_1bl = value;
+        else if (key == "cpukey")
+            opt.cpukey = value;
+        else if (key == "cfldv")
+            opt.cfldv = value;
 
-        MERGE_OPT(core.noenter);
-        MERGE_OPT(core.nolog);
-        MERGE_OPT(core.noinfo);
-        MERGE_OPT(core.gxunsafe);
-        MERGE_OPT(core.verbose);
+        else if (key == "nosecurity")
+            opt.nosecurity = b;
+        else if (key == "nosusecurity")
+            opt.nosusecurity = b;
+        else if (key == "nofcrt")
+            opt.nofcrt = b;
+        else if (key == "noremap")
+            opt.noremap = b;
+        else if (key == "nandmu")
+            opt.nandmu = b;
+        else if (key == "nomobile")
+            opt.nomobile = b;
+        else if (key == "noecdremap")
+            opt.noecdremap = b;
+        else if (key == "smcnocheck")
+            opt.smcnocheck = b;
+        else if (key == "xellbutton")
+            opt.xellbutton = value;
+        else if (key == "xellbutton2")
+            opt.xellbutton2 = value;
+        else if (key == "addon") {
+            std::string_view rem = value_sv;
+            while (!rem.empty()) {
+                auto colon = rem.find(':');
+                std::string_view tok =
+                    Trim((colon != std::string_view::npos) ? rem.substr(0, colon) : rem);
+                rem = (colon != std::string_view::npos) ? rem.substr(colon + 1) : "";
+                if (!tok.empty()) {
+                    opt.addons.emplace_back(tok);
+                }
+            }
+        }
 
-        MERGE_OPT(core_builder.nosecurity);
-        MERGE_OPT(core_builder.nosusecurity);
-        MERGE_OPT(core_builder.noremap);
-        MERGE_OPT(core_builder.nandmu);
-        MERGE_OPT(core_builder.nochainpatch);
-        MERGE_OPT(core_builder.nofcrt);
-        MERGE_OPT(core_builder.dualpatchslots);
-        MERGE_OPT(core_builder.mfg);
-        MERGE_OPT(core_builder.xsb);
-        MERGE_OPT(core_builder.nomobile);
-        MERGE_OPT(core_builder.full_image);
-        MERGE_OPT(core_builder.noecc);
-        MERGE_OPT(core_builder.bigblock);
+        else if (key == "cygnos")
+            opt.cygnos = b;
+        else if (key == "demon")
+            opt.demon = b;
+        else if (key == "olddvd")
+            opt.olddvd = b;
+        else if (key == "nodvd")
+            opt.nodvd = b;
+        else if (key == "dualboot")
+            opt.dualboot = value;
 
-        MERGE_OPT(builder.gxunsafe);
-        MERGE_OPT(builder.verbose);
-        MERGE_OPT(builder.noflashfs);
-        MERGE_OPT(builder.noecdremap);
-        MERGE_OPT(builder.smcnocheck);
-        MERGE_STR(builder.xellbutton);
-        MERGE_STR(builder.xellbutton2);
+        else if (key == "cputemp")
+            opt.cputemp = value;
+        else if (key == "gputemp")
+            opt.gputemp = value;
+        else if (key == "edramtemp")
+            opt.edramtemp = value;
+        else if (key == "overcputemp")
+            opt.overcputemp = value;
+        else if (key == "overgputemp")
+            opt.overgputemp = value;
+        else if (key == "overedramtemp")
+            opt.overedramtemp = value;
+        else if (key == "cpufan")
+            opt.cpufan = value;
+        else if (key == "gpufan")
+            opt.gpufan = value;
 
-        MERGE_OPT(jtag.syscall);
-        MERGE_OPT(jtag.pairing_2bl);
-        MERGE_OPT(jtag.cygnos);
-        MERGE_OPT(jtag.demon);
-        MERGE_OPT(jtag.smcnoeject);
-        MERGE_OPT(jtag.smcnoblink);
-        MERGE_OPT(jtag.patchsmc);
-        MERGE_OPT(jtag.olddvd);
-        MERGE_OPT(jtag.nodvd);
-        MERGE_OPT(jtag.dualboot);
-
-        MERGE_STR(smc_config.cputemp);
-        MERGE_STR(smc_config.gputemp);
-        MERGE_STR(smc_config.edramtemp);
-        MERGE_STR(smc_config.overcputemp);
-        MERGE_STR(smc_config.overgputemp);
-        MERGE_STR(smc_config.overedramtemp);
-        MERGE_STR(smc_config.cpufan);
-        MERGE_STR(smc_config.gpufan);
-
-        MERGE_STR(keyvault.avregion);
-        MERGE_STR(keyvault.gameregion);
-        MERGE_STR(keyvault.dvdregion);
-        MERGE_STR(keyvault.macid);
-        MERGE_STR(keyvault.serial);
-        MERGE_STR(keyvault.consoleid);
-        MERGE_STR(keyvault.osig);
-        MERGE_STR(keyvault.mfdate);
-        MERGE_STR(keyvault.dvdkey);
-
-#undef MERGE_OPT
-#undef MERGE_STR
+        else if (key == "avregion" || key == "region")
+            opt.avregion = value;
+        else if (key == "gameregion")
+            opt.gameregion = value;
+        else if (key == "dvdregion")
+            opt.dvdregion = value;
+        else if (key == "macid" || key == "mac")
+            opt.macid = value;
+        else if (key == "dvdkey")
+            opt.dvdkey = value;
     }
 
-    std::expected<OptionsIni, OptionsError> ParseOptionsIni(std::string_view content) {
-        OptionsIni opt{};
+    std::expected<OptionsArgs, OptionsError> ParseOptionsIni(std::string_view content) {
+        OptionsArgs opt{};
 
         std::string_view remaining = content;
 
@@ -265,153 +279,7 @@ namespace Ini {
             }
 
             val_sv = StripInlineSemicolon(val_sv);
-
-            const std::string key = ToLower(std::string(key_sv));
-            const std::string val{val_sv};
-
-            const bool b = ParseBool(val_sv);
-
-            if (key == "type")
-                opt.keys.ctype = val;
-            else if (key == "1blkey")
-                opt.keys.key_1bl = val;
-            else if (key == "cpukey")
-                opt.keys.cpukey = val;
-            else if (key == "cfldv")
-                opt.keys.cfldv = val;
-
-            else if (key == "noenter")
-                opt.core.noenter = b;
-            else if (key == "nolog")
-                opt.core.nolog = b;
-            else if (key == "noinfo")
-                opt.core.noinfo = b;
-            else if (key == "gxunsafe" || key == "unsafe") {
-                opt.core.gxunsafe = b;
-                opt.builder.gxunsafe = b;
-            } else if (key == "verbose") {
-                opt.core.verbose = b;
-                opt.builder.verbose = b;
-            }
-
-            else if (key == "nosecurity")
-                opt.core_builder.nosecurity = b;
-            else if (key == "nosusecurity")
-                opt.core_builder.nosusecurity = b;
-            else if (key == "noremap")
-                opt.core_builder.noremap = b;
-            else if (key == "nandmu")
-                opt.core_builder.nandmu = b;
-            else if (key == "nochainpatch")
-                opt.core_builder.nochainpatch = b;
-            else if (key == "nofcrt")
-                opt.core_builder.nofcrt = b;
-            else if (key == "dualpatchslots")
-                opt.core_builder.dualpatchslots = b;
-            else if (key == "mfg")
-                opt.core_builder.mfg = b;
-            else if (key == "xsb")
-                opt.core_builder.xsb = b;
-            else if (key == "nomobile")
-                opt.core_builder.nomobile = b;
-            else if (key == "full_image")
-                opt.core_builder.full_image = b;
-            else if (key == "noecc")
-                opt.core_builder.noecc = b;
-            else if (key == "bigblock")
-                opt.core_builder.bigblock = b;
-
-            else if (key == "noflashfs")
-                opt.builder.noflashfs = b;
-            else if (key == "noecdremap")
-                opt.builder.noecdremap = b;
-            else if (key == "smcnocheck")
-                opt.builder.smcnocheck = b;
-            else if (key == "xellbutton")
-                opt.builder.xellbutton = val;
-            else if (key == "xellbutton2")
-                opt.builder.xellbutton2 = val;
-
-            else if (key == "cygnos")
-                opt.jtag.cygnos = b;
-            else if (key == "demon")
-                opt.jtag.demon = b;
-            else if (key == "smcnoeject")
-                opt.jtag.smcnoeject = b;
-            else if (key == "smcnoblink")
-                opt.jtag.smcnoblink = b;
-            else if (key == "patchsmc")
-                opt.jtag.patchsmc = b;
-            else if (key == "olddvd")
-                opt.jtag.olddvd = b;
-            else if (key == "nodvd")
-                opt.jtag.nodvd = b;
-            else if (key == "dualboot")
-                opt.jtag.dualboot = b;
-            else if (key == "jtag_syscall") {
-                std::string trimmed = val;
-                if (trimmed.starts_with("0x") || trimmed.starts_with("0X"))
-                    trimmed = trimmed.substr(2);
-                if (auto v = static_cast<uint16_t>(std::stoul(trimmed, nullptr, 16)); true)
-                    opt.jtag.syscall = v;
-            } else if (key == "2blpairing") {
-                // format: 0x11,0x22,0x33
-                std::array<uint8_t, 3> bytes{};
-                std::string_view rem = val_sv;
-                bool ok = true;
-                for (int i = 0; i < 3 && !rem.empty(); ++i) {
-                    auto comma = rem.find(',');
-                    std::string_view tok =
-                        Trim((comma != std::string_view::npos) ? rem.substr(0, comma) : rem);
-                    rem = (comma != std::string_view::npos) ? rem.substr(comma + 1) : "";
-                    if (tok.starts_with("0x") || tok.starts_with("0X"))
-                        tok.remove_prefix(2);
-                    try {
-                        bytes[i] = static_cast<uint8_t>(std::stoul(std::string(tok), nullptr, 16));
-                    } catch (...) {
-                        ok = false;
-                        break;
-                    }
-                }
-                if (ok)
-                    opt.jtag.pairing_2bl = bytes;
-            }
-
-            else if (key == "cputemp")
-                opt.smc_config.cputemp = val;
-            else if (key == "gputemp")
-                opt.smc_config.gputemp = val;
-            else if (key == "edramtemp")
-                opt.smc_config.edramtemp = val;
-            else if (key == "overcputemp")
-                opt.smc_config.overcputemp = val;
-            else if (key == "overgputemp")
-                opt.smc_config.overgputemp = val;
-            else if (key == "overedramtemp")
-                opt.smc_config.overedramtemp = val;
-            else if (key == "cpufan")
-                opt.smc_config.cpufan = val;
-            else if (key == "gpufan")
-                opt.smc_config.gpufan = val;
-
-            else if (key == "avregion" || key == "region")
-                opt.keyvault.avregion = val;
-            else if (key == "gameregion")
-                opt.keyvault.gameregion = val;
-            else if (key == "dvdregion")
-                opt.keyvault.dvdregion = val;
-            else if (key == "macid" || key == "mac")
-                opt.keyvault.macid = val;
-            else if (key == "serial")
-                opt.keyvault.serial = val;
-            else if (key == "consoleid")
-                opt.keyvault.consoleid = val;
-            else if (key == "osig")
-                opt.keyvault.osig = val;
-            else if (key == "mfdate")
-                opt.keyvault.mfdate = val;
-            else if (key == "dvdkey")
-                opt.keyvault.dvdkey = val;
+            ApplyOption(opt, key_sv, val_sv);
         }
 
         return opt;

@@ -90,3 +90,51 @@ struct GxArgs {
     bool stfs_split_xboxupd{false};
     bool license{false};
 };
+
+struct OptionsArgs {
+    // Identity / keys
+    std::optional<std::string> type;
+    std::optional<std::string> rev;
+    std::optional<std::string> key_1bl;
+    std::optional<std::string> cpukey;
+    std::optional<std::string> cfldv;
+    std::optional<std::string> dvdkey;
+
+    // Common boot behavior
+    std::optional<std::string> xellbutton;
+    std::optional<std::string> xellbutton2;
+    std::vector<std::string> addons;
+
+    // JTAG / glitch toggles
+    std::optional<bool> cygnos;
+    std::optional<bool> demon;
+    std::optional<bool> olddvd;
+    std::optional<bool> nodvd;
+    std::optional<std::string> dualboot;
+
+    // General builder behavior
+    std::optional<bool> nomobile;
+    std::optional<bool> nofcrt;
+    std::optional<bool> noremap;
+    std::optional<bool> noecdremap;
+    std::optional<bool> nandmu;
+    std::optional<bool> nosecurity;
+    std::optional<bool> nosusecurity;
+    std::optional<bool> smcnocheck;
+
+    // SMC config overrides
+    std::optional<std::string> cputemp;
+    std::optional<std::string> gputemp;
+    std::optional<std::string> edramtemp;
+    std::optional<std::string> overcputemp;
+    std::optional<std::string> overgputemp;
+    std::optional<std::string> overedramtemp;
+    std::optional<std::string> cpufan;
+    std::optional<std::string> gpufan;
+
+    // KV / config overrides
+    std::optional<std::string> avregion;
+    std::optional<std::string> gameregion;
+    std::optional<std::string> dvdregion;
+    std::optional<std::string> macid;
+};

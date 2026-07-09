@@ -29,6 +29,70 @@ struct FlashFsRootCandidate {
     uint32_t sequence;
 };
 
+struct MobilePageCandidate {
+    uint32_t page_idx;
+    uint8_t block_type;
+    uint32_t data_sequence;
+    uint32_t data_length;
+    uint32_t page_count;
+    uint32_t encoded_page_count;
+};
+
+uint32_t ceil_div_u32(uint32_t value, uint32_t divisor) {
+    if (divisor == 0) {
+        return 0;
+    }
+    return value / divisor + ((value % divisor) != 0U ? 1U : 0U);
+}
+
+std::optional<mobile_result_t>* get_mobile_result_slot(mobile_results_t& results,
+                                                       uint8_t block_type) {
+    switch (block_type) {
+        case 0x31: return &results.x31;
+        case 0x32: return &results.x32;
+        case 0x33: return &results.x33;
+        case 0x34: return &results.x34;
+        case 0x35: return &results.x35;
+        case 0x36: return &results.x36;
+        case 0x37: return &results.x37;
+        case 0x38: return &results.x38;
+        case 0x39: return &results.x39;
+        default: return nullptr;
+    }
+}
+
+const std::optional<mobile_result_t>* get_mobile_result_slot(const mobile_results_t& results,
+                                                             uint8_t block_type) {
+    switch (block_type) {
+        case 0x31: return &results.x31;
+        case 0x32: return &results.x32;
+        case 0x33: return &results.x33;
+        case 0x34: return &results.x34;
+        case 0x35: return &results.x35;
+        case 0x36: return &results.x36;
+        case 0x37: return &results.x37;
+        case 0x38: return &results.x38;
+        case 0x39: return &results.x39;
+        default: return nullptr;
+    }
+}
+
+std::optional<std::vector<uint8_t>>* get_mobile_data_slot(mobile_data_t& data,
+                                                          uint8_t block_type) {
+    switch (block_type) {
+        case 0x31: return &data.x31;
+        case 0x32: return &data.x32;
+        case 0x33: return &data.x33;
+        case 0x34: return &data.x34;
+        case 0x35: return &data.x35;
+        case 0x36: return &data.x36;
+        case 0x37: return &data.x37;
+        case 0x38: return &data.x38;
+        case 0x39: return &data.x39;
+        default: return nullptr;
+    }
+}
+
 std::optional<uint16_t> fs_offset_to_block_idx(const gxbuild3::utils::FlashBlockDriver& driver,
                                                uint32_t fs_offset) {
     const uint32_t lil_block_length = driver.lil_block_length();
@@ -77,6 +141,154 @@ std::optional<FlashFsRootCandidate> detect_flashfs_root_from_spare(
     }
 
     return best_root;
+}
+
+std::optional<mobile_results_t> detect_mobile_results_from_spare(
+    const gxbuild3::utils::FlashBlockDriver& driver) {
+    if (!has_spare_data(driver) || driver.page_length() == 0 || driver.block_length() == 0) {
+        return std::nullopt;
+    }
+
+    const uint32_t pages_per_block = driver.block_length() / driver.page_length();
+    if (pages_per_block == 0) {
+        return std::nullopt;
+    }
+
+    std::vector<MobilePageCandidate> found_pages;
+    found_pages.reserve(driver.page_count());
+
+    for (uint32_t page_idx = 0; page_idx < driver.page_count(); ++page_idx) {
+        auto spare = driver.read_page_spare(page_idx);
+        if (!spare) {
+            continue;
+        }
+
+        const uint8_t* spare_data = spare->data();
+        const uint8_t fs_page_count = driver.get_spare_page_count_field(spare_data);
+        const uint8_t block_type = driver.get_spare_block_type_field(spare_data);
+        if (fs_page_count == 0 || !driver.is_mobile_data(block_type)) {
+            continue;
+        }
+
+        const uint32_t data_length = driver.get_spare_size_field(spare_data);
+        if (data_length == 0) {
+            continue;
+        }
+
+        const uint32_t page_count = ceil_div_u32(data_length, 0x200);
+        const uint32_t encoded_page_count = pages_per_block - fs_page_count;
+        if (page_count != encoded_page_count && page_count == 1 && data_length >= 0x200) {
+            continue;
+        }
+
+        found_pages.push_back(MobilePageCandidate{
+            .page_idx = page_idx,
+            .block_type = block_type,
+            .data_sequence = driver.get_spare_seq_field(spare_data),
+            .data_length = data_length,
+            .page_count = page_count,
+            .encoded_page_count = encoded_page_count,
+        });
+    }
+
+    if (found_pages.empty()) {
+        return std::nullopt;
+    }
+
+    mobile_results_t results{};
+    bool found_any = false;
+
+    for (const auto& candidate : found_pages) {
+        auto* slot = get_mobile_result_slot(results, candidate.block_type);
+        if (!slot) {
+            continue;
+        }
+
+        if (*slot && ((*slot)->start_page + (*slot)->page_count) > candidate.page_idx) {
+            continue;
+        }
+
+        size_t matched_pages = 0;
+        bool mismatch = false;
+        for (const auto& page : found_pages) {
+            if (page.block_type != candidate.block_type) {
+                continue;
+            }
+            if (page.page_idx < candidate.page_idx ||
+                page.page_idx >= (candidate.page_idx + candidate.page_count)) {
+                continue;
+            }
+
+            if (page.encoded_page_count != candidate.encoded_page_count) {
+                mismatch = true;
+                break;
+            }
+
+            matched_pages++;
+        }
+
+        if (mismatch || matched_pages != candidate.page_count) {
+            continue;
+        }
+
+        if (*slot && (candidate.data_sequence < (*slot)->data_sequence ||
+                      (candidate.data_sequence == (*slot)->data_sequence &&
+                       candidate.page_idx <= (*slot)->start_page))) {
+            continue;
+        }
+
+        *slot = mobile_result_t{
+            .block_type = candidate.block_type,
+            .data_sequence = candidate.data_sequence,
+            .start_page = candidate.page_idx,
+            .page_count = candidate.page_count,
+            .data_length = candidate.data_length,
+        };
+        found_any = true;
+    }
+
+    if (!found_any) {
+        return std::nullopt;
+    }
+
+    return results;
+}
+
+std::optional<mobile_data_t> load_mobile_data_from_results(
+    const gxbuild3::utils::FlashBlockDriver& driver, const mobile_results_t& results) {
+    mobile_data_t data{};
+    bool found_any = false;
+
+    for (uint8_t block_type = 0x31; block_type <= 0x39; ++block_type) {
+        const auto* result_slot = get_mobile_result_slot(results, block_type);
+        auto* data_slot = get_mobile_data_slot(data, block_type);
+        if (!result_slot || !data_slot || !(*result_slot)) {
+            continue;
+        }
+
+        const auto& result = **result_slot;
+        const uint64_t start_offset = static_cast<uint64_t>(result.start_page) * 0x200ULL;
+        if (start_offset > std::numeric_limits<size_t>::max()) {
+            Log::Warn("Skipping mobile 0x{:02x}: start offset out of range", block_type);
+            continue;
+        }
+
+        auto mobile_bytes = driver.read(static_cast<size_t>(start_offset), result.data_length);
+        if (!mobile_bytes) {
+            Log::Warn("Failed to read mobile 0x{:02x} at page 0x{:x}", block_type,
+                      result.start_page);
+            continue;
+        }
+
+        *data_slot = std::move(*mobile_bytes);
+        found_any = true;
+    }
+
+    if (!found_any) {
+        return std::nullopt;
+    }
+
+    return data;
 }
 
 void load_known_flashfs_files(const gxbuild3::bootloaders::FlashFileSystem& filesystem,
@@ -210,6 +422,8 @@ nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
     } else {
         results.fs_block_idx = fs_offset_to_block_idx(driver, results.fs_offset);
     }
+
+    results.mobile_results = detect_mobile_results_from_spare(driver);
     
     // Parse CB (2BL) offset
     // entrypoint at 0x08 serves as the CB offset
@@ -362,6 +576,11 @@ FlashImage FlashImage::parse(std::vector<uint8_t> data) {
     image.header = parse_nand_header(std::span<const uint8_t>(*header_data));
 
     image.nand_results = read(image.driver);
+
+    if (image.nand_results && image.nand_results->mobile_results) {
+        image.mobile_data =
+            load_mobile_data_from_results(image.driver, *image.nand_results->mobile_results);
+    }
 
     if (image.nand_results && image.nand_results->fs_block_idx) {
         auto fs_driver = std::make_shared<gxbuild3::utils::FlashBlockDriver>(image.driver);

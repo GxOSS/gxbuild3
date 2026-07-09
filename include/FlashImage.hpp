@@ -46,23 +46,23 @@ typedef struct BlResults {
 } bl_results_t;
 
 typedef struct MobileResult {
-    char name;
+    uint8_t block_type;
     uint32_t data_sequence;
     uint32_t start_page;
     uint32_t page_count;
+    uint32_t data_length;
 } mobile_result_t;
 
 typedef struct MobileResults {
-    std::optional<mobile_result_t> a;
-    std::optional<mobile_result_t> b;
-    std::optional<mobile_result_t> c;
-    std::optional<mobile_result_t> d;
-    std::optional<mobile_result_t> e;
-    std::optional<mobile_result_t> f;
-    std::optional<mobile_result_t> g;
-    std::optional<mobile_result_t> h;
-    std::optional<mobile_result_t> i;
-    std::optional<mobile_result_t> j;
+    std::optional<mobile_result_t> x31;
+    std::optional<mobile_result_t> x32;
+    std::optional<mobile_result_t> x33;
+    std::optional<mobile_result_t> x34;
+    std::optional<mobile_result_t> x35;
+    std::optional<mobile_result_t> x36;
+    std::optional<mobile_result_t> x37;
+    std::optional<mobile_result_t> x38;
+    std::optional<mobile_result_t> x39;
 } mobile_results_t;
 
 typedef struct NandResults {
@@ -109,16 +109,15 @@ typedef struct _payloads_t {
 } payloads_t;
 
 typedef struct MobileData {
-    std::optional<std::vector<uint8_t>> a;
-    std::optional<std::vector<uint8_t>> b;
-    std::optional<std::vector<uint8_t>> c;
-    std::optional<std::vector<uint8_t>> d;
-    std::optional<std::vector<uint8_t>> e;
-    std::optional<std::vector<uint8_t>> f;
-    std::optional<std::vector<uint8_t>> g;
-    std::optional<std::vector<uint8_t>> h;
-    std::optional<std::vector<uint8_t>> i;
-    std::optional<std::vector<uint8_t>> j;
+    std::optional<std::vector<uint8_t>> x31;
+    std::optional<std::vector<uint8_t>> x32;
+    std::optional<std::vector<uint8_t>> x33;
+    std::optional<std::vector<uint8_t>> x34;
+    std::optional<std::vector<uint8_t>> x35;
+    std::optional<std::vector<uint8_t>> x36;
+    std::optional<std::vector<uint8_t>> x37;
+    std::optional<std::vector<uint8_t>> x38;
+    std::optional<std::vector<uint8_t>> x39;
 } mobile_data_t;
 
 typedef struct _flashfs_files_t {
