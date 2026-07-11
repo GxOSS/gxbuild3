@@ -1,6 +1,7 @@
 #include "FlashImage.hpp"
 #include "Ascii.hpp"
 #include "Log.hpp"
+#include "Options.hpp"
 #include "Utils.hpp"
 #include "bootloaders/2bl.hpp"
 #include "bootloaders/Keyvault.hpp"
@@ -320,6 +321,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             Log::Info("1BL key loaded from merged options");
         }
     }
+
+    Options::Init(options);
 
     if (args.mode == "extract") {
         if (!args.source_nand) {

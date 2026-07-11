@@ -15,6 +15,7 @@ add_subdirectory(extern/stfs)
 add_executable(gxbuild3
     src/Main.cpp
     src/Log.cpp
+    src/Options.cpp
     src/Utils.cpp
     src/FlashImage.cpp
     src/utils/FlashBlockDriver.cpp
