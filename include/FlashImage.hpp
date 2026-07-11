@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 // NAND Header structure based on NANDFS.md
@@ -128,6 +129,8 @@ typedef struct _flashfs_files_t {
     std::optional<std::vector<uint8_t>> secdata;
 } flashfs_files_t;
 
+using flashfs_payload_map_t = std::unordered_map<std::string, std::vector<uint8_t>>;
+
 struct FlashImage {
     gxbuild3::utils::FlashBlockDriver driver;
     raw_nand_header_t header{};
@@ -150,6 +153,7 @@ struct FlashImage {
     std::optional<mobile_data_t> mobile_data;
     std::optional<gxbuild3::bootloaders::FlashFileSystem> filesystem;
     std::optional<flashfs_files_t> flashfs_files;
+    std::optional<flashfs_payload_map_t> flashfs_payloads;
     std::optional<gxbuild3::bootloaders::XeCoronaFsData> corona_fs_data;
 
     static FlashImage parse(std::vector<uint8_t> data);

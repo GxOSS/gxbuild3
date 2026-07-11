@@ -322,6 +322,60 @@ void load_known_flashfs_files(const gxbuild3::bootloaders::FlashFileSystem& file
     }
 }
 
+void add_known_flashfs_files_to_payloads(const flashfs_files_t& files,
+                                         flashfs_payload_map_t& payloads) {
+    const auto assign_if_present = [&payloads](std::string_view name,
+                                               const std::optional<std::vector<uint8_t>>& data) {
+        if (data) {
+            payloads[std::string{name}] = *data;
+        }
+    };
+
+    assign_if_present("crl.bin", files.crl);
+    assign_if_present("dae.bin", files.dae);
+    assign_if_present("extended.bin", files.extended);
+    assign_if_present("fcrt.bin", files.fcrt);
+    assign_if_present("secdata.bin", files.secdata);
+}
+
+flashfs_payload_map_t collect_build_flashfs_payloads(const flash_image_t& image) {
+    flashfs_payload_map_t payloads;
+    if (image.flashfs_files) {
+        add_known_flashfs_files_to_payloads(*image.flashfs_files, payloads);
+    }
+    if (image.flashfs_payloads) {
+        for (const auto& [name, data] : *image.flashfs_payloads) {
+            payloads[name] = data;
+        }
+    }
+    return payloads;
+}
+
+std::optional<uint16_t> resolve_build_fs_block_idx(const flash_image_t& image,
+                                                   const gxbuild3::utils::FlashBlockDriver& driver) {
+    if (image.nand_results && image.nand_results->fs_block_idx) {
+        return image.nand_results->fs_block_idx;
+    }
+    if (image.nand_results) {
+        return fs_offset_to_block_idx(driver, image.nand_results->fs_offset);
+    }
+    return fs_offset_to_block_idx(driver, bswap32(image.header.fs_offset));
+}
+
+uint32_t resolve_build_fs_version(const flash_image_t& image) {
+    if (image.filesystem) {
+        return image.filesystem->version();
+    }
+    return 1;
+}
+
+uint32_t resolve_build_sys_update_addr(const flash_image_t& image) {
+    if (image.nand_results && image.nand_results->cf0) {
+        return image.nand_results->cf0->offset;
+    }
+    return bswap32(image.header.cf1_offset);
+}
+
 } // namespace
 
 bl_type get_bl_type(uint16_t value) {
@@ -836,5 +890,49 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
 }
 
 std::vector<uint8_t> build(const flash_image_t& image) {
-    return image.driver.image_data();
+    flash_image_t built = image;
+
+    const auto payloads = collect_build_flashfs_payloads(built);
+    if (payloads.empty()) {
+        return built.driver.image_data();
+    }
+
+    auto fs_block_idx = resolve_build_fs_block_idx(built, built.driver);
+    if (!fs_block_idx) {
+        Log::Warn("build: no FlashFS root block index available, skipping filesystem build");
+        return built.driver.image_data();
+    }
+
+    const uint32_t fs_version = resolve_build_fs_version(built);
+    const uint32_t sys_update_addr = resolve_build_sys_update_addr(built);
+
+    auto fs_driver = std::make_shared<gxbuild3::utils::FlashBlockDriver>(built.driver);
+    gxbuild3::bootloaders::FlashFileSystem filesystem(fs_driver);
+
+    if (!filesystem.create_defaults(*fs_block_idx, fs_version, sys_update_addr,
+                                    built.xconfig.has_value())) {
+        Log::Error("build: failed to initialize FlashFS defaults");
+        return built.driver.image_data();
+    }
+
+    for (const auto& [filename, data] : payloads) {
+        gxbuild3::bootloaders::FlashFileSystemEntry* entry = nullptr;
+        if (!filesystem.add_file(filename, entry) || entry == nullptr) {
+            Log::Error("build: failed to add FlashFS file '{}'", filename);
+            return built.driver.image_data();
+        }
+
+        if (!filesystem.set_file_data(*entry, data)) {
+            Log::Error("build: failed to write FlashFS file '{}'", filename);
+            return built.driver.image_data();
+        }
+    }
+
+    if (!filesystem.save(*fs_block_idx)) {
+        Log::Error("build: failed to save FlashFS");
+        return built.driver.image_data();
+    }
+
+    built.driver = *fs_driver;
+    return built.driver.image_data();
 }

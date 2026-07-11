@@ -374,8 +374,55 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
     }
 
     if (!bl_key_bytes.empty() && build_doc) {
-        std::filesystem::path fw_dir =
-            args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path()));
+        const auto& opts = Options::Get();
+        const std::filesystem::path data_dir =
+            args.data_dir.value_or(std::filesystem::current_path());
+        const std::optional<std::filesystem::path> common_dir = args.common_dir;
+        std::filesystem::path fw_dir = args.fw_dir.value_or(data_dir);
+        std::optional<Stfs::ExtractedFiles> stfs_files;
+
+        auto normalize_file_key = [](std::string key) {
+            std::replace(key.begin(), key.end(), '\\', '/');
+            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+            return key;
+        };
+
+        auto entry_to_lookup_path = [](std::string_view entry_name) {
+            std::string normalized{entry_name};
+            std::replace(normalized.begin(), normalized.end(), '\\', '/');
+            return std::filesystem::path(normalized);
+        };
+
+        using resolved_file_t = std::pair<std::filesystem::path, std::vector<uint8_t>>;
+
+        auto load_from_root = [&](const std::filesystem::path& root, std::string_view entry_name)
+            -> std::optional<resolved_file_t> {
+            const auto candidate = root / entry_to_lookup_path(entry_name);
+            auto file_data = ReadFile(candidate);
+            if (!file_data) {
+                return std::nullopt;
+            }
+            return resolved_file_t{candidate, std::move(*file_data)};
+        };
+
+        auto load_from_common_dir = [&](std::string_view entry_name)
+            -> std::optional<resolved_file_t> {
+            if (!common_dir) {
+                return std::nullopt;
+            }
+            return load_from_root(*common_dir, entry_name);
+        };
+
+        auto load_main_section_file = [&](std::string_view entry_name)
+            -> std::optional<resolved_file_t> {
+            if (auto loaded = load_from_root(fw_dir, entry_name)) {
+                return loaded;
+            }
+            if (auto loaded = load_from_root(data_dir, entry_name)) {
+                return loaded;
+            }
+            return load_from_common_dir(entry_name);
+        };
 
         std::string section_name;
         if (args.console) {
@@ -401,8 +448,54 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
 
 
+        {
+            std::optional<std::filesystem::path> stfs_path;
+
+            if (std::filesystem::exists(data_dir) && std::filesystem::is_directory(data_dir)) {
+                for (const auto& dir_entry : std::filesystem::directory_iterator(data_dir)) {
+                    if (!dir_entry.is_regular_file()) {
+                        continue;
+                    }
+
+                    const auto candidate = dir_entry.path();
+                    const std::string filename = candidate.filename().string();
+                    std::string filename_lower = filename;
+                    std::transform(filename_lower.begin(), filename_lower.end(),
+                                   filename_lower.begin(), ::tolower);
+
+                    if (!candidate.has_extension() && filename_lower.starts_with("su")) {
+                        if (stfs_path) {
+                            Log::Warn("Multiple STFS candidates found in '{}', using '{}'",
+                                      data_dir.string(), stfs_path->filename().string());
+                            break;
+                        }
+                        stfs_path = candidate;
+                    }
+                }
+            }
+
+            if (stfs_path) {
+                auto stfs_data = ReadFile(*stfs_path);
+                if (!stfs_data) {
+                    Log::Error("Failed to read STFS package: {}", stfs_path->string());
+                    return 1;
+                }
+
+                try {
+                    const Stfs::StfsContainer container{AsByteSpan(*stfs_data)};
+                    stfs_files = container.extractToMemory();
+                    Log::Info("Loaded STFS package '{}' with {} extracted files",
+                              stfs_path->filename().string(), stfs_files->size());
+                } catch (const std::exception& ex) {
+                    Log::Error("Failed to parse STFS package '{}': {}", stfs_path->string(),
+                               ex.what());
+                    return 1;
+                }
+            }
+        }
+
         // build patch file name and grab if present
-        std::filesystem::path patches_dir =  args.data_dir / "bin";
+        std::filesystem::path patches_dir = data_dir / "bin";
         std::filesystem::path patch;
         std::string g1_model = switch (args.console->string()) {
             case "xenon" || "elpis" || "zephyr" || "falcon" || "opus" || "jasper" || "jasperbb" || "jasperbigffs" || "tonasket":
@@ -466,58 +559,161 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 return 1;
             }
             new_nand.keyvault = donor_nand->keyvault;
+            new_nand.smc = donor_nand->smc;
+        }
+
+        if (!new_nand.smc) {
+            if (auto smc_file = load_from_root(fw_dir, "smc.bin")) {
+                new_nand.smc = std::move(smc_file->second);
+                Log::Info("Loaded SMC from '{}'", smc_file->first.string());
+            }
+        }
+
+        if (!new_nand.keyvault) {
+            if (auto kv_file = load_from_root(fw_dir, "kv.bin")) {
+                new_nand.keyvault = std::move(kv_file->second);
+                Log::Info("Loaded keyvault from '{}'", kv_file->first.string());
+            }
         }
 
         
         const Ini::Section* sec_sec = build_doc->get("security");
         const Ini::Section* flashfs_sec = build_doc->get("flashfs");
         const Ini::Section* payloads_sec = build_doc->get("payloads");
+        (void)payloads_sec;
+
+        auto stfs_file_to_u8 = [&stfs_files, &normalize_file_key](std::string_view name)
+            -> std::optional<std::vector<uint8_t>> {
+            if (!stfs_files) {
+                return std::nullopt;
+            }
+
+            const auto it = stfs_files->find(normalize_file_key(std::string{name}));
+            if (it == stfs_files->end()) {
+                return std::nullopt;
+            }
+
+            std::vector<uint8_t> out;
+            out.reserve(it->second.size());
+            for (const auto byte : it->second) {
+                out.push_back(std::to_integer<uint8_t>(byte));
+            }
+            return out;
+        };
+
+        auto ensure_flashfs_files = [&new_nand]() -> flashfs_files_t& {
+            if (!new_nand.flashfs_files) {
+                new_nand.flashfs_files.emplace();
+            }
+            return *new_nand.flashfs_files;
+        };
+
+        auto ensure_flashfs_payloads = [&new_nand]() -> flashfs_payload_map_t& {
+            if (!new_nand.flashfs_payloads) {
+                new_nand.flashfs_payloads.emplace();
+            }
+            return *new_nand.flashfs_payloads;
+        };
+
+        auto load_security_common_file = [&](std::string_view entry_name)
+            -> std::optional<resolved_file_t> { return load_from_common_dir(entry_name); };
+
+        auto load_flashfs_payload_file = [&](std::string_view entry_name)
+            -> std::optional<resolved_file_t> {
+            if (auto loaded = load_from_root(fw_dir, entry_name)) {
+                return loaded;
+            }
+            if (auto loaded = load_from_root(data_dir, entry_name)) {
+                return loaded;
+            }
+            if (auto stfs_file = stfs_file_to_u8(entry_name)) {
+                return resolved_file_t{std::filesystem::path{"<stfs>"}, std::move(*stfs_file)};
+            }
+            return load_from_common_dir(entry_name);
+        };
 
         // merge nand security into struct depending on options
-        if (sec_sec && donor_nand && donor_nand->flashfs_files &&
-            !Options::Get().nosecurity.value_or(false)) {
+        if (sec_sec) {
             for (const auto& entry : *sec_sec) {
-                std::string key_lower = entry.key;
-                std::transform(key_lower.begin(), key_lower.end(), key_lower.begin(), ::tolower);
+                const std::string key_lower = normalize_file_key(entry.key);
 
                 if (key_lower == "fcrt.bin") {
-                    if (Options::Get().nofcrt.value_or(false)) {
+                    if (opts.nofcrt.value_or(false)) {
                         continue;
                     }
-                    if (donor_nand->flashfs_files->fcrt) {
-                        if (!new_nand.flashfs_files) {
-                            new_nand.flashfs_files.emplace();
+                    if (!opts.nosecurity.value_or(false) && donor_nand &&
+                        donor_nand->flashfs_files && donor_nand->flashfs_files->fcrt) {
+                        ensure_flashfs_files().fcrt = donor_nand->flashfs_files->fcrt;
+                    } else if (!opts.nosusecurity.value_or(false)) {
+                        if (auto stfs_file = stfs_file_to_u8(key_lower)) {
+                            ensure_flashfs_files().fcrt = std::move(*stfs_file);
+                        } else if (auto common_file = load_security_common_file(entry.key)) {
+                            ensure_flashfs_files().fcrt = std::move(common_file->second);
                         }
-                        new_nand.flashfs_files->fcrt = donor_nand->flashfs_files->fcrt;
+                    } else if (auto common_file = load_security_common_file(entry.key)) {
+                        ensure_flashfs_files().fcrt = std::move(common_file->second);
                     }
                 } else if (key_lower == "crl.bin") {
-                    if (donor_nand->flashfs_files->crl) {
-                        if (!new_nand.flashfs_files) {
-                            new_nand.flashfs_files.emplace();
+                    if (!opts.nosecurity.value_or(false) && donor_nand &&
+                        donor_nand->flashfs_files && donor_nand->flashfs_files->crl) {
+                        ensure_flashfs_files().crl = donor_nand->flashfs_files->crl;
+                    } else if (!opts.nosusecurity.value_or(false)) {
+                        if (auto stfs_file = stfs_file_to_u8(key_lower)) {
+                            ensure_flashfs_files().crl = std::move(*stfs_file);
+                        } else if (auto common_file = load_security_common_file(entry.key)) {
+                            ensure_flashfs_files().crl = std::move(common_file->second);
                         }
-                        new_nand.flashfs_files->crl = donor_nand->flashfs_files->crl;
+                    } else if (auto common_file = load_security_common_file(entry.key)) {
+                        ensure_flashfs_files().crl = std::move(common_file->second);
                     }
                 } else if (key_lower == "dae.bin") {
-                    if (donor_nand->flashfs_files->dae) {
-                        if (!new_nand.flashfs_files) {
-                            new_nand.flashfs_files.emplace();
+                    if (!opts.nosecurity.value_or(false) && donor_nand &&
+                        donor_nand->flashfs_files && donor_nand->flashfs_files->dae) {
+                        ensure_flashfs_files().dae = donor_nand->flashfs_files->dae;
+                    } else if (!opts.nosusecurity.value_or(false)) {
+                        if (auto stfs_file = stfs_file_to_u8(key_lower)) {
+                            ensure_flashfs_files().dae = std::move(*stfs_file);
+                        } else if (auto common_file = load_security_common_file(entry.key)) {
+                            ensure_flashfs_files().dae = std::move(common_file->second);
                         }
-                        new_nand.flashfs_files->dae = donor_nand->flashfs_files->dae;
+                    } else if (auto common_file = load_security_common_file(entry.key)) {
+                        ensure_flashfs_files().dae = std::move(common_file->second);
                     }
                 } else if (key_lower == "extended.bin") {
-                    if (donor_nand->flashfs_files->extended) {
-                        if (!new_nand.flashfs_files) {
-                            new_nand.flashfs_files.emplace();
+                    if (!opts.nosecurity.value_or(false) && donor_nand &&
+                        donor_nand->flashfs_files && donor_nand->flashfs_files->extended) {
+                        ensure_flashfs_files().extended = donor_nand->flashfs_files->extended;
+                    } else if (!opts.nosusecurity.value_or(false)) {
+                        if (auto stfs_file = stfs_file_to_u8(key_lower)) {
+                            ensure_flashfs_files().extended = std::move(*stfs_file);
+                        } else if (auto common_file = load_security_common_file(entry.key)) {
+                            ensure_flashfs_files().extended = std::move(common_file->second);
                         }
-                        new_nand.flashfs_files->extended = donor_nand->flashfs_files->extended;
+                    } else if (auto common_file = load_security_common_file(entry.key)) {
+                        ensure_flashfs_files().extended = std::move(common_file->second);
                     }
                 } else if (key_lower == "secdata.bin") {
-                    if (donor_nand->flashfs_files->secdata) {
-                        if (!new_nand.flashfs_files) {
-                            new_nand.flashfs_files.emplace();
+                    if (!opts.nosecurity.value_or(false) && donor_nand &&
+                        donor_nand->flashfs_files && donor_nand->flashfs_files->secdata) {
+                        ensure_flashfs_files().secdata = donor_nand->flashfs_files->secdata;
+                    } else if (!opts.nosusecurity.value_or(false)) {
+                        if (auto stfs_file = stfs_file_to_u8(key_lower)) {
+                            ensure_flashfs_files().secdata = std::move(*stfs_file);
+                        } else if (auto common_file = load_security_common_file(entry.key)) {
+                            ensure_flashfs_files().secdata = std::move(common_file->second);
                         }
-                        new_nand.flashfs_files->secdata = donor_nand->flashfs_files->secdata;
+                    } else if (auto common_file = load_security_common_file(entry.key)) {
+                        ensure_flashfs_files().secdata = std::move(common_file->second);
                     }
+                }
+            }
+        }
+
+        if (flashfs_sec) {
+            for (const auto& entry : *flashfs_sec) {
+                const auto key_lower = normalize_file_key(entry.key);
+                if (auto flashfs_file = load_flashfs_payload_file(entry.key)) {
+                    ensure_flashfs_payloads()[key_lower] = std::move(flashfs_file->second);
                 }
             }
         }
@@ -533,21 +729,23 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 if (key_lower == "none")
                     continue;
 
-                std::filesystem::path stage_path = fw_dir / entry.key;
-                auto stage_data = ReadFile(stage_path);
-                if (!stage_data) {
-                    Log::Warn("Stage file not found: {}", stage_path.string());
+                auto resolved_stage = load_main_section_file(entry.key);
+                if (!resolved_stage) {
+                    Log::Warn("Stage file '{}' not found in fw/data/common directories",
+                              entry.key);
                     continue;
                 }
+
+                auto& [stage_path, stage_data] = *resolved_stage;
 
                 try {
                     if (key_lower.starts_with("cba") || key_lower.starts_with("cb_") ||
                         key_lower.starts_with("sb_")) {
-                        auto cb = BootloaderCb::parse(*stage_data);
+                        auto cb = BootloaderCb::parse(stage_data);
                         if (bl_key_bytes.size() == 16) {
                             cb.decrypt(bl_key_bytes.data());
                         }
-                        new_nand.cb_or_A = std::move(*stage_data);
+                        new_nand.cb_or_A = std::move(stage_data);
                         if (cb.is_decrypted()) {
                             Log::Info("CB '{}' parsed successfully (v{})", entry.key,
                                       cb.header.header.version);
@@ -555,11 +753,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                             Log::Warn("CB '{}' parsed but is not decrypted", entry.key);
                         }
                     } else if (key_lower.starts_with("cbx")) {
-                        auto cbx = BootloaderCb::parse(*stage_data);
+                        auto cbx = BootloaderCb::parse(stage_data);
                         if (bl_key_bytes.size() == 16) {
                             cbx.decrypt(bl_key_bytes.data());
                         }
-                        new_nand.cb_X = std::move(*stage_data);
+                        new_nand.cb_X = std::move(stage_data);
                         if (cbx.is_decrypted()) {
                             Log::Info("CBX '{}' parsed successfully (v{})", entry.key,
                                       cbx.header.header.version);
@@ -567,11 +765,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                             Log::Warn("CBX '{}' parsed but is not decrypted", entry.key);
                         }
                     } else if (key_lower.starts_with("cbb")) {
-                        auto cbb = BootloaderCb::parse(*stage_data);
+                        auto cbb = BootloaderCb::parse(stage_data);
                         if (bl_key_bytes.size() == 16) {
                             cbb.decrypt(bl_key_bytes.data());
                         }
-                        new_nand.cb_B = std::move(*stage_data);
+                        new_nand.cb_B = std::move(stage_data);
                         if (cbb.is_decrypted()) {
                             Log::Info("CBB '{}' parsed successfully (v{})", entry.key,
                                       cbb.header.header.version);
@@ -579,34 +777,34 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                             Log::Warn("CBB '{}' parsed but is not decrypted", entry.key);
                         }
                     } else if (key_lower.starts_with("sc")) {
-                        auto sc = BootloaderSc::parse(*stage_data);
-                        new_nand.sc = std::move(*stage_data);
+                        auto sc = BootloaderSc::parse(stage_data);
+                        new_nand.sc = std::move(stage_data);
                         Log::Info("SC '{}' parsed successfully (v{})", entry.key,
                                   sc.header.header.version);
                     } else if (key_lower.starts_with("cd")) {
-                        auto cd = BootloaderCd::parse(*stage_data);
-                        new_nand.cd = std::move(*stage_data);
+                        auto cd = BootloaderCd::parse(stage_data);
+                        new_nand.cd = std::move(stage_data);
                         Log::Info("CD '{}' parsed successfully (v{})", entry.key,
                                   cd.header.header.version);
                     } else if (key_lower.starts_with("ce")) {
-                        auto ce = BootloaderCe::parse(*stage_data);
-                        new_nand.ce = std::move(*stage_data);
+                        auto ce = BootloaderCe::parse(stage_data);
+                        new_nand.ce = std::move(stage_data);
                         Log::Info("CE '{}' parsed successfully (v{})", entry.key,
                                   ce.header.header.version);
                     } else if (key_lower.starts_with("cf")) {
-                        auto cf = BootloaderCf::parse(*stage_data);
+                        auto cf = BootloaderCf::parse(stage_data);
                         if (!new_nand.patchslot_0) {
                             new_nand.patchslot_0.emplace();
                         }
-                        new_nand.patchslot_0->cf = std::move(*stage_data);
+                        new_nand.patchslot_0->cf = std::move(stage_data);
                         Log::Info("CF '{}' parsed successfully (v{})", entry.key,
                                   cf.header.header.version);
                     } else if (key_lower.starts_with("cg")) {
-                        auto cg = BootloaderCg::parse(*stage_data);
+                        auto cg = BootloaderCg::parse(stage_data);
                         if (!new_nand.patchslot_0) {
                             new_nand.patchslot_0.emplace();
                         }
-                        new_nand.patchslot_0->cg = std::move(*stage_data);
+                        new_nand.patchslot_0->cg = std::move(stage_data);
                         Log::Info("CG '{}' parsed successfully (v{})", entry.key,
                                   cg.header.header.version);
                     } else {
