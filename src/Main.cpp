@@ -400,6 +400,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         }
 
 
+
+        // build patch file name and grab if present
         std::filesystem::path patches_dir =  args.data_dir / "bin";
         std::filesystem::path patch;
         std::string g1_model = switch (args.console->string()) {
@@ -446,71 +448,178 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         }
 
         flash_image_t new_nand{};
+        std::optional<flash_image_t> donor_nand;
 
-        if (!args.source_nand.empty()) {
-            std::filesystem::path source_nand_path = args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path()));
-            source_nand_path /= args.source_nand;
+        // open nand, grab keyvault
+        if (args.source_nand) {
+            std::filesystem::path source_nand_path =
+                args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path()));
+            source_nand_path /= *args.source_nand;
             auto source_nand_data = ReadFile(source_nand_path);
             if (!source_nand_data) {
                 Log::Error("Failed to read source NAND file: {}", source_nand_path.string());
                 return 1;
             }
-            flash_image_t donor_nand = FlashImage::parse(*source_nand_data);
-            if (!donor_nand.valid) {
+            donor_nand = FlashImage::parse(*source_nand_data);
+            if (!donor_nand->nand_results || !donor_nand->nand_results->valid) {
                 Log::Error("Failed to parse source NAND file: {}", source_nand_path.string());
                 return 1;
             }
-            new_nand.keyvault = donor_nand.keyvault;
-            new_nand.smc_config = donor_nand.smc_config;
-            new_nand.flashfs_files = donor_nand.flashfs_files;
-            
+            new_nand.keyvault = donor_nand->keyvault;
         }
 
-        const Ini::Section* main_sec = build_doc->get(section_name);
+        
         const Ini::Section* sec_sec = build_doc->get("security");
         const Ini::Section* flashfs_sec = build_doc->get("flashfs");
         const Ini::Section* payloads_sec = build_doc->get("payloads");
 
-        if (sec_sec) {
+        // merge nand security into struct depending on options
+        if (sec_sec && donor_nand && donor_nand->flashfs_files &&
+            !Options::Get().nosecurity.value_or(false)) {
+            for (const auto& entry : *sec_sec) {
+                std::string key_lower = entry.key;
+                std::transform(key_lower.begin(), key_lower.end(), key_lower.begin(), ::tolower);
+
+                if (key_lower == "fcrt.bin") {
+                    if (Options::Get().nofcrt.value_or(false)) {
+                        continue;
+                    }
+                    if (donor_nand->flashfs_files->fcrt) {
+                        if (!new_nand.flashfs_files) {
+                            new_nand.flashfs_files.emplace();
+                        }
+                        new_nand.flashfs_files->fcrt = donor_nand->flashfs_files->fcrt;
+                    }
+                } else if (key_lower == "crl.bin") {
+                    if (donor_nand->flashfs_files->crl) {
+                        if (!new_nand.flashfs_files) {
+                            new_nand.flashfs_files.emplace();
+                        }
+                        new_nand.flashfs_files->crl = donor_nand->flashfs_files->crl;
+                    }
+                } else if (key_lower == "dae.bin") {
+                    if (donor_nand->flashfs_files->dae) {
+                        if (!new_nand.flashfs_files) {
+                            new_nand.flashfs_files.emplace();
+                        }
+                        new_nand.flashfs_files->dae = donor_nand->flashfs_files->dae;
+                    }
+                } else if (key_lower == "extended.bin") {
+                    if (donor_nand->flashfs_files->extended) {
+                        if (!new_nand.flashfs_files) {
+                            new_nand.flashfs_files.emplace();
+                        }
+                        new_nand.flashfs_files->extended = donor_nand->flashfs_files->extended;
+                    }
+                } else if (key_lower == "secdata.bin") {
+                    if (donor_nand->flashfs_files->secdata) {
+                        if (!new_nand.flashfs_files) {
+                            new_nand.flashfs_files.emplace();
+                        }
+                        new_nand.flashfs_files->secdata = donor_nand->flashfs_files->secdata;
+                    }
+                }
+            }
         }
 
 
+        // main bootloader section
+        const Ini::Section* main_sec = build_doc->get(section_name);
         if (main_sec) {
             for (const auto& entry : *main_sec) {
                 std::string key_lower = entry.key;
                 std::transform(key_lower.begin(), key_lower.end(), key_lower.begin(), ::tolower);
 
-                bool is_cb = key_lower.starts_with("cb") || key_lower.starts_with("sb");
-                if (!is_cb)
+                if (key_lower == "none")
                     continue;
 
-                std::filesystem::path cb_path = fw_dir / entry.key;
-                auto cb_data = ReadFile(cb_path);
-                if (!cb_data) {
-                    Log::Warn("CB file not found: {}", cb_path.string());
+                std::filesystem::path stage_path = fw_dir / entry.key;
+                auto stage_data = ReadFile(stage_path);
+                if (!stage_data) {
+                    Log::Warn("Stage file not found: {}", stage_path.string());
                     continue;
                 }
 
                 try {
-                    auto cb = BootloaderCb::parse(*cb_data);
-                    cb.decrypt(bl_key_bytes.data());
-                    if (cb.is_decrypted()) {
-                        Log::Info("CB '{}' decrypted successfully (v{})", entry.key,
-                                  cb.header.header.version);
+                    if (key_lower.starts_with("cba") || key_lower.starts_with("cb_") ||
+                        key_lower.starts_with("sb_")) {
+                        auto cb = BootloaderCb::parse(*stage_data);
+                        if (bl_key_bytes.size() == 16) {
+                            cb.decrypt(bl_key_bytes.data());
+                        }
+                        new_nand.cb_or_A = std::move(*stage_data);
+                        if (cb.is_decrypted()) {
+                            Log::Info("CB '{}' parsed successfully (v{})", entry.key,
+                                      cb.header.header.version);
+                        } else {
+                            Log::Warn("CB '{}' parsed but is not decrypted", entry.key);
+                        }
+                    } else if (key_lower.starts_with("cbx")) {
+                        auto cbx = BootloaderCb::parse(*stage_data);
+                        if (bl_key_bytes.size() == 16) {
+                            cbx.decrypt(bl_key_bytes.data());
+                        }
+                        new_nand.cb_X = std::move(*stage_data);
+                        if (cbx.is_decrypted()) {
+                            Log::Info("CBX '{}' parsed successfully (v{})", entry.key,
+                                      cbx.header.header.version);
+                        } else {
+                            Log::Warn("CBX '{}' parsed but is not decrypted", entry.key);
+                        }
+                    } else if (key_lower.starts_with("cbb")) {
+                        auto cbb = BootloaderCb::parse(*stage_data);
+                        if (bl_key_bytes.size() == 16) {
+                            cbb.decrypt(bl_key_bytes.data());
+                        }
+                        new_nand.cb_B = std::move(*stage_data);
+                        if (cbb.is_decrypted()) {
+                            Log::Info("CBB '{}' parsed successfully (v{})", entry.key,
+                                      cbb.header.header.version);
+                        } else {
+                            Log::Warn("CBB '{}' parsed but is not decrypted", entry.key);
+                        }
+                    } else if (key_lower.starts_with("sc")) {
+                        auto sc = BootloaderSc::parse(*stage_data);
+                        new_nand.sc = std::move(*stage_data);
+                        Log::Info("SC '{}' parsed successfully (v{})", entry.key,
+                                  sc.header.header.version);
+                    } else if (key_lower.starts_with("cd")) {
+                        auto cd = BootloaderCd::parse(*stage_data);
+                        new_nand.cd = std::move(*stage_data);
+                        Log::Info("CD '{}' parsed successfully (v{})", entry.key,
+                                  cd.header.header.version);
+                    } else if (key_lower.starts_with("ce")) {
+                        auto ce = BootloaderCe::parse(*stage_data);
+                        new_nand.ce = std::move(*stage_data);
+                        Log::Info("CE '{}' parsed successfully (v{})", entry.key,
+                                  ce.header.header.version);
+                    } else if (key_lower.starts_with("cf")) {
+                        auto cf = BootloaderCf::parse(*stage_data);
+                        if (!new_nand.patchslot_0) {
+                            new_nand.patchslot_0.emplace();
+                        }
+                        new_nand.patchslot_0->cf = std::move(*stage_data);
+                        Log::Info("CF '{}' parsed successfully (v{})", entry.key,
+                                  cf.header.header.version);
+                    } else if (key_lower.starts_with("cg")) {
+                        auto cg = BootloaderCg::parse(*stage_data);
+                        if (!new_nand.patchslot_0) {
+                            new_nand.patchslot_0.emplace();
+                        }
+                        new_nand.patchslot_0->cg = std::move(*stage_data);
+                        Log::Info("CG '{}' parsed successfully (v{})", entry.key,
+                                  cg.header.header.version);
                     } else {
-                        Log::Warn("CB '{}' decrypt completed but verification failed", entry.key);
+                        Log::Trace("Ignoring unhandled bootloader stage '{}'", entry.key);
                     }
                 } catch (const std::exception& ex) {
-                    Log::Error("CB '{}' parse/decrypt failed: {}", entry.key, ex.what());
+                    Log::Error("Stage '{}' parse failed: {}", entry.key, ex.what());
                 }
-                break;
             }
         } else if (!section_name.empty()) {
             Log::Warn("Section '{}' not found in build INI", section_name);
         }
     }
-
-    if (args.)
 
     return 0;
     }
