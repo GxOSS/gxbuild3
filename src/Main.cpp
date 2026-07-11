@@ -5,6 +5,8 @@
 #include "Utils.hpp"
 #include "bootloaders/2bl.hpp"
 #include "bootloaders/Keyvault.hpp"
+#include "patchers/BinaryParser.hpp"
+#include "patchers/Patcher.hpp"
 #include "ini/IniParser.hpp"
 #include "stfs/StfsContainer.hpp"
 
@@ -424,6 +426,35 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             return load_from_common_dir(entry_name);
         };
 
+        auto load_payload_file = [&](std::string_view filename) -> std::optional<resolved_file_t> {
+            const auto& root = fw_dir;
+
+            if (auto loaded = load_from_root(root, filename)) {
+                return loaded;
+            }
+            if (auto loaded = load_from_root(root / "payloads", filename)) {
+                return loaded;
+            }
+            return std::nullopt;
+        };
+
+        auto load_xell_file = [&]() -> std::optional<resolved_file_t> {
+            static constexpr std::string_view kGlitchXellName = "xell-gggggg.bin";
+            static constexpr std::string_view kJtagXellName = "xell-2f.bin";
+
+            if (args.build_type && *args.build_type == BuildType::Jtag) {
+                return load_payload_file(kJtagXellName);
+            }
+
+            return load_payload_file(kGlitchXellName);
+        };
+
+        const bool is_xell_build_type = args.build_type &&
+                                        (*args.build_type == BuildType::Jtag ||
+                                         *args.build_type == BuildType::Glitch ||
+                                         *args.build_type == BuildType::Glitch2 ||
+                                         *args.build_type == BuildType::Glitch3);
+
         std::string section_name;
         if (args.console) {
             static const std::map<ConsoleType, std::string> kConsoleSectionSuffix = {
@@ -497,40 +528,65 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         // build patch file name and grab if present
         std::filesystem::path patches_dir = data_dir / "bin";
         std::filesystem::path patch;
-        std::string g1_model = switch (args.console->string()) {
-            case "xenon" || "elpis" || "zephyr" || "falcon" || "opus" || "jasper" || "jasperbb" || "jasperbigffs" || "tonasket":
-                return "phat";
-            case "trinity" || "trinitybb" || "trinitybigffs" || "corona" || "corona4g" || "winchester" || "winchester4g":
-                return "trinity";
-            default:
-                return args.console->string();
-        };
+        const std::string console_name = [&]() -> std::string {
+            if (!args.console) {
+                return {};
+            }
 
-        std::string patch_mobo = args.console->string() + ("_" + args.bl_ext->string()).value_or("");
+            switch (*args.console) {
+                case ConsoleType::Xenon: return "xenon";
+                case ConsoleType::Zephyr: return "zephyr";
+                case ConsoleType::Falcon: return "falcon";
+                case ConsoleType::Jasper: return "jasper";
+                case ConsoleType::Jasper256: return "jasper256";
+                case ConsoleType::Jasper512: return "jasper512";
+                case ConsoleType::JasperBB: return "jasperbb";
+                case ConsoleType::JasperBigFFS: return "jasperbigffs";
+                case ConsoleType::Trinity: return "trinity";
+                case ConsoleType::TrinityBB: return "trinitybb";
+                case ConsoleType::TrinityBigFFS: return "trinitybigffs";
+                case ConsoleType::Corona: return "corona";
+                case ConsoleType::Corona4G: return "corona4g";
+                case ConsoleType::Winchester: return "winchester";
+                case ConsoleType::Winchester4G: return "winchester4g";
+            }
 
-        switch (build_type_str) {
-            case "retail" || "devkit":
-                break;
-            case "glitch":
-                patch = patches_dir / "patches_" + g1_model + ".bin";
-                break;
-            case "glitch2":
-                patch = patches_dir / "patches_g2" + patch_mobo + ".bin";
-                break;
-            case "glitch2m" || "devgl":
-                patch = patches_dir / "patches_g2m" + patch_mobo + ".bin";
-                break;
-            case "glitch3":
-                patch = patches_dir / "patches_g3" + patch_mobo + ".bin";
-                break;
-            case "jtag":
-                patch = patches_dir / "patches_" + patch_mobo + ".bin";
-                break;
-            default:
-                Log::Error("Unknown build type: {}", build_type_str);
-                return 1;
-                break;
+            return {};
+        }();
+        std::string g1_model = console_name;
+        if (console_name == "xenon" || console_name == "elpis" || console_name == "zephyr" ||
+            console_name == "falcon" || console_name == "opus" || console_name == "jasper" ||
+            console_name == "jasperbb" || console_name == "jasperbigffs" ||
+            console_name == "tonasket") {
+            g1_model = "phat";
+        } else if (console_name == "trinity" || console_name == "trinitybb" ||
+                   console_name == "trinitybigffs" || console_name == "corona" ||
+                   console_name == "corona4g" || console_name == "winchester" ||
+                   console_name == "winchester4g") {
+            g1_model = "trinity";
         }
+
+        const std::string patch_mobo =
+            console_name + (args.bl_ext ? "_" + *args.bl_ext : std::string{});
+
+        if (build_type_str == "retail" || build_type_str == "devkit") {
+            // Retail/devkit builds do not use patch files.
+        } else if (build_type_str == "glitch") {
+            patch = patches_dir / ("patches_" + g1_model + ".bin");
+        } else if (build_type_str == "glitch2") {
+            patch = patches_dir / ("patches_g2" + patch_mobo + ".bin");
+        } else if (build_type_str == "glitch2m" || build_type_str == "devgl") {
+            patch = patches_dir / ("patches_g2m" + patch_mobo + ".bin");
+        } else if (build_type_str == "glitch3") {
+            patch = patches_dir / ("patches_g3" + patch_mobo + ".bin");
+        } else if (build_type_str == "jtag") {
+            patch = patches_dir / ("patches_" + patch_mobo + ".bin");
+        } else {
+            Log::Error("Unknown build type: {}", build_type_str);
+            return 1;
+        }
+
+        std::optional<ParsedPatchSet> parsed_patchset;
 
         if (!patch.empty()) {
             auto patch_data = ReadFile(patch);
@@ -538,6 +594,67 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 Log::Error("Failed to read patch file: {}", patch.string());
                 return 1;
             }
+
+            auto load_addon_file = [&](std::string_view addon_name)
+                -> std::optional<resolved_file_t> {
+                const auto try_load = [&](std::string_view candidate_name)
+                    -> std::optional<resolved_file_t> {
+                    if (auto loaded = load_from_root(data_dir, candidate_name)) {
+                        return loaded;
+                    }
+                    if (auto loaded = load_from_root(data_dir / "payloads", candidate_name)) {
+                        return loaded;
+                    }
+                    return std::nullopt;
+                };
+
+                if (auto loaded = try_load(addon_name)) {
+                    return loaded;
+                }
+
+                const std::filesystem::path addon_path{std::string{addon_name}};
+                if (!addon_path.has_extension()) {
+                    const std::string addon_with_bin = std::string{addon_name} + ".bin";
+                    return try_load(addon_with_bin);
+                }
+
+                return std::nullopt;
+            };
+
+            parsed_patchset.emplace();
+            if (!args.build_type ||
+                !BinaryParser::ParsePatchSet(patch.string(), *args.build_type, *parsed_patchset)) {
+                Log::Error("Failed to parse patchset '{}'", patch.string());
+                return 1;
+            }
+
+            auto raw_tail_it = std::find_if(
+                parsed_patchset->sections.begin(), parsed_patchset->sections.end(),
+                [](const ParsedPatchSection& section) {
+                    return section.target == PatchSectionTarget::Khv ||
+                           section.target == PatchSectionTarget::JtagSection4;
+                });
+            if (raw_tail_it == parsed_patchset->sections.end()) {
+                Log::Error("Parsed patchset '{}' is missing a raw insert section", patch.string());
+                return 1;
+            }
+
+            for (const auto& addon_name : args.addons) {
+                auto addon_file = load_addon_file(addon_name);
+                if (!addon_file) {
+                    Log::Error("Failed to resolve addon patch '{}'", addon_name);
+                    return 1;
+                }
+
+                raw_tail_it->raw_data.insert(raw_tail_it->raw_data.end(),
+                                             addon_file->second.begin(), addon_file->second.end());
+                Log::Info("Appended addon '{}' ({} bytes) to '{}'", addon_file->first.string(),
+                          addon_file->second.size(), raw_tail_it->identifier);
+            }
+
+            Log::Info("Parsed patchset '{}' as {} with {} sections", patch.filename().string(),
+                      parsed_patchset->kind == PatchSetKind::Jtag ? "JTAG" : "Glitch",
+                      parsed_patchset->sections.size());
         }
 
         flash_image_t new_nand{};
@@ -573,6 +690,40 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             if (auto kv_file = load_from_root(fw_dir, "kv.bin")) {
                 new_nand.keyvault = std::move(kv_file->second);
                 Log::Info("Loaded keyvault from '{}'", kv_file->first.string());
+            }
+        }
+
+        if (is_xell_build_type) {
+            if (auto xell_file = load_xell_file()) {
+                if (!new_nand.xellblock) {
+                    new_nand.xellblock.emplace();
+                }
+                new_nand.xellblock->xell_main = std::move(xell_file->second);
+                Log::Info("Loaded XeLL from '{}'", xell_file->first.string());
+            }
+        }
+
+        if (args.build_type && *args.build_type == BuildType::Jtag) {
+            auto ensure_payloads = [&new_nand]() -> payloads_t& {
+                if (!new_nand.payloads) {
+                    new_nand.payloads.emplace();
+                }
+                return *new_nand.payloads;
+            };
+
+            if (auto payload_file = load_payload_file("payload.bin")) {
+                ensure_payloads().jtag_payload = std::move(payload_file->second);
+                Log::Info("Loaded JTAG payload from '{}'", payload_file->first.string());
+            }
+
+            if (auto freeboot_file = load_payload_file("freeboot.bin")) {
+                ensure_payloads().jtag_rebooter = std::move(freeboot_file->second);
+                Log::Info("Loaded JTAG rebooter from '{}'", freeboot_file->first.string());
+            }
+
+            if (auto fuses_file = load_payload_file("fuses.bin")) {
+                ensure_payloads().vfuses = std::move(fuses_file->second);
+                Log::Info("Loaded JTAG fuses from '{}'", fuses_file->first.string());
             }
         }
 
@@ -613,6 +764,55 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 new_nand.flashfs_payloads.emplace();
             }
             return *new_nand.flashfs_payloads;
+        };
+
+        auto ensure_payloads = [&new_nand]() -> payloads_t& {
+            if (!new_nand.payloads) {
+                new_nand.payloads.emplace();
+            }
+            return *new_nand.payloads;
+        };
+
+        auto find_patch_section = [&](PatchSectionTarget target) -> const ParsedPatchSection* {
+            if (!parsed_patchset) {
+                return nullptr;
+            }
+
+            const auto it = std::find_if(
+                parsed_patchset->sections.begin(), parsed_patchset->sections.end(),
+                [target](const ParsedPatchSection& section) { return section.target == target; });
+            return it != parsed_patchset->sections.end() ? &*it : nullptr;
+        };
+
+        auto has_any_key_bytes = [](const std::array<uint8_t, 16>& key) {
+            return std::any_of(key.begin(), key.end(), [](uint8_t byte) { return byte != 0; });
+        };
+
+        auto apply_glitch_patch_section = [&](std::vector<uint8_t>& bytes, PatchSectionTarget target,
+                                             std::string_view stage_name) -> bool {
+            const auto* section = find_patch_section(target);
+            if (!section) {
+                return true;
+            }
+            if (section->encoding != PatchSectionEncoding::XePatch) {
+                Log::Error("Patch section '{}' for {} is not an xePatch section",
+                           section->identifier, stage_name);
+                return false;
+            }
+
+            XePatchSection xe_section;
+            xe_section.identifier = section->identifier;
+            xe_section.entries = section->entries;
+
+            if (!XePatch::ApplyPatchSection(bytes.data(), static_cast<uint32_t>(bytes.size()),
+                                            xe_section)) {
+                Log::Error("Failed to apply {} patch section '{}'", stage_name,
+                           section->identifier);
+                return false;
+            }
+
+            Log::Info("Applied {} patch section '{}'", stage_name, section->identifier);
+            return true;
         };
 
         auto load_security_common_file = [&](std::string_view entry_name)
@@ -719,6 +919,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         }
 
 
+        std::array<uint8_t, 16> cb_key{};
+        std::array<uint8_t, 16> cb_b_key{};
+        std::optional<bl2_header> cb_a_header;
+
         // main bootloader section
         const Ini::Section* main_sec = build_doc->get(section_name);
         if (main_sec) {
@@ -745,11 +949,21 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                         if (bl_key_bytes.size() == 16) {
                             cb.decrypt(bl_key_bytes.data());
                         }
-                        new_nand.cb_or_A = std::move(stage_data);
+                        auto cb_bytes = cb.serialize();
                         if (cb.is_decrypted()) {
+                            cb_a_header = cb.header;
+                            if (cb.derived_key) {
+                                cb_key = *cb.derived_key;
+                            }
+                            if (!apply_glitch_patch_section(cb_bytes, PatchSectionTarget::Cb,
+                                                            "CB")) {
+                                return 1;
+                            }
+                            new_nand.cb_or_A = std::move(cb_bytes);
                             Log::Info("CB '{}' parsed successfully (v{})", entry.key,
                                       cb.header.header.version);
                         } else {
+                            new_nand.cb_or_A = std::move(stage_data);
                             Log::Warn("CB '{}' parsed but is not decrypted", entry.key);
                         }
                     } else if (key_lower.starts_with("cbx")) {
@@ -766,14 +980,23 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                         }
                     } else if (key_lower.starts_with("cbb")) {
                         auto cbb = BootloaderCb::parse(stage_data);
-                        if (bl_key_bytes.size() == 16) {
-                            cbb.decrypt(bl_key_bytes.data());
+                        if (cb_a_header && has_any_key_bytes(cb_key) && cpu_key_bytes.size() == 16) {
+                            cbb.decrypt_v2(*cb_a_header, cb_key.data(), cpu_key_bytes.data());
                         }
-                        new_nand.cb_B = std::move(stage_data);
+                        auto cbb_bytes = cbb.serialize();
                         if (cbb.is_decrypted()) {
+                            if (cbb.derived_key) {
+                                cb_b_key = *cbb.derived_key;
+                            }
+                            if (!apply_glitch_patch_section(cbb_bytes, PatchSectionTarget::Cbb,
+                                                            "CB_B")) {
+                                return 1;
+                            }
+                            new_nand.cb_B = std::move(cbb_bytes);
                             Log::Info("CBB '{}' parsed successfully (v{})", entry.key,
                                       cbb.header.header.version);
                         } else {
+                            new_nand.cb_B = std::move(stage_data);
                             Log::Warn("CBB '{}' parsed but is not decrypted", entry.key);
                         }
                     } else if (key_lower.starts_with("sc")) {
@@ -783,9 +1006,28 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                                   sc.header.header.version);
                     } else if (key_lower.starts_with("cd")) {
                         auto cd = BootloaderCd::parse(stage_data);
-                        new_nand.cd = std::move(stage_data);
-                        Log::Info("CD '{}' parsed successfully (v{})", entry.key,
-                                  cd.header.header.version);
+                        const uint8_t* active_cb_key =
+                            has_any_key_bytes(cb_b_key)
+                                ? cb_b_key.data()
+                                : (has_any_key_bytes(cb_key) ? cb_key.data() : nullptr);
+                        if (active_cb_key) {
+                            cd.decrypt(active_cb_key,
+                                       cpu_key_bytes.size() == 16 ? cpu_key_bytes.data() : nullptr);
+                        }
+
+                        auto cd_bytes = cd.serialize();
+                        if (cd.is_decrypted()) {
+                            if (!apply_glitch_patch_section(cd_bytes, PatchSectionTarget::Cd,
+                                                            "CD")) {
+                                return 1;
+                            }
+                            new_nand.cd = std::move(cd_bytes);
+                            Log::Info("CD '{}' parsed successfully (v{})", entry.key,
+                                      cd.header.header.version);
+                        } else {
+                            new_nand.cd = std::move(stage_data);
+                            Log::Warn("CD '{}' parsed but is not decrypted", entry.key);
+                        }
                     } else if (key_lower.starts_with("ce")) {
                         auto ce = BootloaderCe::parse(stage_data);
                         new_nand.ce = std::move(stage_data);
@@ -817,8 +1059,22 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         } else if (!section_name.empty()) {
             Log::Warn("Section '{}' not found in build INI", section_name);
         }
+
+        if (parsed_patchset) {
+            if (parsed_patchset->kind == PatchSetKind::Glitch) {
+                if (const auto* khv_section = find_patch_section(PatchSectionTarget::Khv)) {
+                    ensure_payloads().addon_patches = khv_section->raw_data;
+                    Log::Info("Assigned merged glitch payloads from '{}' ({} bytes)",
+                              khv_section->identifier, khv_section->raw_data.size());
+                }
+            } else if (parsed_patchset->kind == PatchSetKind::Jtag) {
+                auto serialized_patchset = BinaryParser::SerializePatchSet(*parsed_patchset);
+                ensure_payloads().addon_patches = std::move(serialized_patchset);
+                Log::Info("Assigned merged JTAG patch payloads ({} bytes)",
+                          ensure_payloads().addon_patches->size());
+            }
+        }
     }
 
     return 0;
-    }
 }

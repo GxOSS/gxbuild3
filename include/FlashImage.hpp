@@ -15,6 +15,8 @@
 #include <unordered_map>
 #include <vector>
 
+enum class BuildType;
+
 // NAND Header structure based on NANDFS.md
 // Note: This appears to start with a bl_header (magic, version, pairing, flags, entrypoint, size)
 // followed by NAND-specific fields
@@ -98,15 +100,15 @@ typedef struct _patchslot_t {
 } patchslot_t;
 
 typedef struct _xellblock_t {
-    uint8_t xell_main;
-    uint8_t xell_backup;
+    std::optional<std::vector<uint8_t>> xell_main;
+    std::optional<std::vector<uint8_t>> xell_backup;
 } xellblock_t;
 
 typedef struct _payloads_t {
     std::optional<std::vector<uint8_t>> addon_patches;
-    std::optional<uint8_t> jtag_rebooter;
-    std::optional<uint8_t> jtag_payload;
-    std::optional<uint8_t> vfuses;
+    std::optional<std::vector<uint8_t>> jtag_rebooter;
+    std::optional<std::vector<uint8_t>> jtag_payload;
+    std::optional<std::vector<uint8_t>> vfuses;
 } payloads_t;
 
 typedef struct MobileData {
@@ -168,6 +170,21 @@ typedef struct FlashImageMetadata {
     std::optional<std::vector<uint8_t>> pairingdata;
 } flash_image_metadata_t;
 
+typedef struct BuildLayout {
+    std::optional<uint32_t> payload_offset;
+    std::optional<uint32_t> payload_region_size;
+    std::optional<uint32_t> freeboot_offset;
+    std::optional<uint32_t> freeboot_region_size;
+    std::optional<uint32_t> patches_offset;
+    std::optional<uint32_t> patches_region_size;
+    std::optional<uint32_t> fuses_offset;
+    std::optional<uint32_t> fuses_region_size;
+    std::optional<uint32_t> xell_offset;
+    std::optional<uint32_t> xell_region_size;
+    std::optional<uint32_t> patchslot_base;
+    uint32_t patchslot_length{0};
+} build_layout_t;
+
 nand_results_t read(const std::vector<uint8_t>& data);
 
 // New function that uses FlashBlockDriver directly
@@ -183,4 +200,6 @@ flash_image_t parse(const std::vector<uint8_t>& data);
 
 bool extract_all(const flash_image_t& flash, const std::filesystem::path& output_dir, const std::vector<uint8_t>& cpu_key_bytes, const std::vector<uint8_t>& bl_key_bytes);
 
-std::vector<uint8_t> build(const flash_image_t& image);
+std::optional<build_layout_t> resolve_build_layout(const flash_image_t& image, BuildType build_type);
+
+std::vector<uint8_t> build(const flash_image_t& image, BuildType build_type);

@@ -1,6 +1,6 @@
 #include "FlashImage.hpp"
-#include "Utils.hpp"
 #include "Log.hpp"
+#include "Utils.hpp"
 #include "bootloaders/Common.hpp"
 #include "bootloaders/Keyvault.hpp"
 #include "bootloaders/SMC.hpp"
@@ -15,6 +15,43 @@
 using namespace gxbuild3::bootloaders;
 
 namespace {
+
+constexpr uint32_t kGlitchXellRawOffset = 0x70000;
+constexpr uint32_t kXellSlotSize = 0x40000;
+constexpr uint32_t kJtagPayloadOffset = 0x00000200;
+constexpr uint32_t kJtagPayloadRegionSize = 0x200;
+constexpr uint32_t kJtagFreebootOffset = 0x00090000;
+constexpr uint32_t kJtagFreebootRegionSize = 0x1000;
+constexpr uint32_t kJtagPatchesOffset = 0x00091000;
+constexpr uint32_t kJtagPatchesRegionSize = 0x4000;
+constexpr uint32_t kJtagFusesOffset = 0x00095000;
+constexpr uint32_t kJtagFusesRegionSize = 0x60;
+constexpr uint32_t kJtagXellOffset = 0x00095060;
+
+bool is_glitch_build(BuildType build_type) {
+    switch (build_type) {
+        case BuildType::Glitch:
+        case BuildType::Glitch2:
+        case BuildType::Glitch2m:
+        case BuildType::Glitch3:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool is_jtag_build(BuildType build_type) { return build_type == BuildType::Jtag; }
+
+std::optional<uint32_t> resolve_build_patchslot_base(const flash_image_t& image) {
+    if (image.nand_results && image.nand_results->cf0) {
+        return image.nand_results->cf0->offset;
+    }
+    const uint32_t header_offset = bswap32(image.header.cf1_offset);
+    if (header_offset != 0 && header_offset != 0xFFFFFFFFU) {
+        return header_offset;
+    }
+    return std::nullopt;
+}
 
 bool has_spare_data(const gxbuild3::utils::FlashBlockDriver& driver) {
     return driver.page_length() >= 0x210;
@@ -374,6 +411,131 @@ uint32_t resolve_build_sys_update_addr(const flash_image_t& image) {
         return image.nand_results->cf0->offset;
     }
     return bswap32(image.header.cf1_offset);
+}
+
+} // namespace
+
+std::optional<build_layout_t> resolve_build_layout(const flash_image_t& image,
+                                                   BuildType build_type) {
+    build_layout_t layout{};
+
+    if (is_glitch_build(build_type)) {
+        const auto patchslot_base = resolve_build_patchslot_base(image);
+        if (!patchslot_base) {
+            return std::nullopt;
+        }
+
+        layout.patchslot_base = *patchslot_base;
+        layout.patchslot_length = image.driver.patch_slot_length();
+        layout.patches_offset = *patchslot_base + layout.patchslot_length + 0x10U;
+        layout.patches_region_size = layout.patchslot_length - 0x10U;
+        layout.xell_offset = kGlitchXellRawOffset;
+        layout.xell_region_size = kXellSlotSize;
+        return layout;
+    }
+
+    if (is_jtag_build(build_type)) {
+        layout.payload_offset = kJtagPayloadOffset;
+        layout.payload_region_size = kJtagPayloadRegionSize;
+        layout.freeboot_offset = kJtagFreebootOffset;
+        layout.freeboot_region_size = kJtagFreebootRegionSize;
+        layout.patches_offset = kJtagPatchesOffset;
+        layout.patches_region_size = kJtagPatchesRegionSize;
+        layout.fuses_offset = kJtagFusesOffset;
+        layout.fuses_region_size = kJtagFusesRegionSize;
+        layout.xell_offset = kJtagXellOffset;
+        layout.xell_region_size = kXellSlotSize;
+        return layout;
+    }
+
+    return std::nullopt;
+}
+
+namespace {
+
+bool write_build_region(gxbuild3::utils::FlashBlockDriver& driver, uint32_t offset,
+                        uint32_t region_size, const std::vector<uint8_t>& data,
+                        std::string_view label) {
+    if (data.size() > region_size) {
+        Log::Error("build: {} size 0x{:x} exceeds available region 0x{:x}", label, data.size(),
+                   region_size);
+        return false;
+    }
+
+    std::vector<uint8_t> region(region_size, 0xFF);
+    std::memcpy(region.data(), data.data(), data.size());
+
+    if (!driver.write(offset, region.data(), region.size())) {
+        Log::Error("build: failed to write {} at 0x{:x}", label, offset);
+        return false;
+    }
+
+    Log::Info("build: wrote {} at 0x{:x} ({} bytes, slot size 0x{:x})", label, offset,
+              data.size(), region_size);
+    return true;
+}
+
+bool write_build_xell(flash_image_t& image, BuildType build_type) {
+    const auto layout = resolve_build_layout(image, build_type);
+    if (!layout || !layout->xell_offset || !layout->xell_region_size) {
+        return true;
+    }
+
+    if (!image.xellblock || !image.xellblock->xell_main) {
+        return true;
+    }
+
+    return write_build_region(image.driver, *layout->xell_offset, *layout->xell_region_size,
+                              *image.xellblock->xell_main, "XeLL");
+}
+
+bool write_build_addon_patches(flash_image_t& image, BuildType build_type) {
+    const auto layout = resolve_build_layout(image, build_type);
+    if (!layout || !layout->patches_offset || !layout->patches_region_size) {
+        return true;
+    }
+
+    if (!image.payloads || !image.payloads->addon_patches) {
+        return true;
+    }
+
+    return write_build_region(image.driver, *layout->patches_offset, *layout->patches_region_size,
+                              *image.payloads->addon_patches, "patch blob");
+}
+
+bool write_build_jtag_payloads(flash_image_t& image, BuildType build_type) {
+    if (!is_jtag_build(build_type)) {
+        return true;
+    }
+
+    const auto layout = resolve_build_layout(image, build_type);
+    if (!layout || !image.payloads) {
+        return true;
+    }
+
+    if (layout->payload_offset && layout->payload_region_size && image.payloads->jtag_payload) {
+        if (!write_build_region(image.driver, *layout->payload_offset, *layout->payload_region_size,
+                                *image.payloads->jtag_payload, "JTAG payload")) {
+            return false;
+        }
+    }
+
+    if (layout->freeboot_offset && layout->freeboot_region_size && image.payloads->jtag_rebooter) {
+        if (!write_build_region(image.driver, *layout->freeboot_offset,
+                                *layout->freeboot_region_size,
+                                *image.payloads->jtag_rebooter, "JTAG rebooter")) {
+            return false;
+        }
+    }
+
+    if (layout->fuses_offset && layout->fuses_region_size && image.payloads->vfuses) {
+        if (!write_build_region(image.driver, *layout->fuses_offset, *layout->fuses_region_size,
+                                *image.payloads->vfuses, "JTAG fuses")) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 } // namespace
@@ -889,8 +1051,20 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
     return true;
 }
 
-std::vector<uint8_t> build(const flash_image_t& image) {
+std::vector<uint8_t> build(const flash_image_t& image, BuildType build_type) {
     flash_image_t built = image;
+
+    if (!write_build_jtag_payloads(built, build_type)) {
+        return built.driver.image_data();
+    }
+
+    if (!write_build_addon_patches(built, build_type)) {
+        return built.driver.image_data();
+    }
+
+    if (!write_build_xell(built, build_type)) {
+        return built.driver.image_data();
+    }
 
     const auto payloads = collect_build_flashfs_payloads(built);
     if (payloads.empty()) {

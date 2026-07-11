@@ -8,15 +8,16 @@ C++ 23 Cross-Platform Xbox 360 Image Builder, Patcher and Extractor
 [X] NAND Parsing
 [X] NAND Building
 [X] STFS Parsing
-[ ] Crypto
+[X] Crypto ???
 [X] Bootloader Patching
+[X] Addon Patches / KHV patches
 [X] SMC Patching
-[X] SMC Config Patching
+[ ] SMC Config Patching
 [ ] Keyvault Patching
 [X] Filesystem Parsing
 [X] Filesystem Building
 [X] Mobile Support
-[ ] UI / UX
+[X] UI / UX
 
 
 ## Credits
