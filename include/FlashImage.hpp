@@ -171,6 +171,9 @@ typedef struct FlashImageMetadata {
 } flash_image_metadata_t;
 
 typedef struct BuildLayout {
+    std::optional<uint32_t> smc_offset;
+    std::optional<uint32_t> kv_offset;
+    std::optional<uint32_t> bootloader_chain_offset;
     std::optional<uint32_t> payload_offset;
     std::optional<uint32_t> payload_region_size;
     std::optional<uint32_t> freeboot_offset;
@@ -182,6 +185,7 @@ typedef struct BuildLayout {
     std::optional<uint32_t> xell_offset;
     std::optional<uint32_t> xell_region_size;
     std::optional<uint32_t> patchslot_base;
+    std::optional<uint32_t> patchslot_1_base;
     uint32_t patchslot_length{0};
 } build_layout_t;
 

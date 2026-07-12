@@ -28,6 +28,8 @@ constexpr uint32_t kJtagFusesOffset = 0x00095000;
 constexpr uint32_t kJtagFusesRegionSize = 0x60;
 constexpr uint32_t kJtagXellOffset = 0x00095060;
 
+uint32_t align_up_0x10(uint32_t value) { return (value + 0x0FU) & ~0x0FU; }
+
 bool is_glitch_build(BuildType build_type) {
     switch (build_type) {
         case BuildType::Glitch:
@@ -50,6 +52,48 @@ std::optional<uint32_t> resolve_build_patchslot_base(const flash_image_t& image)
     if (header_offset != 0 && header_offset != 0xFFFFFFFFU) {
         return header_offset;
     }
+    return std::nullopt;
+}
+
+std::optional<uint32_t> resolve_build_smc_offset(const flash_image_t& image) {
+    if (image.nand_results && image.nand_results->smc_offset != 0 &&
+        image.nand_results->smc_offset != 0xFFFFFFFFU) {
+        return image.nand_results->smc_offset;
+    }
+
+    const uint32_t header_offset = bswap32(image.header.smc_offset);
+    if (header_offset != 0 && header_offset != 0xFFFFFFFFU) {
+        return header_offset;
+    }
+
+    return std::nullopt;
+}
+
+std::optional<uint32_t> resolve_build_kv_offset(const flash_image_t& image) {
+    if (image.nand_results && image.nand_results->kv_offset != 0 &&
+        image.nand_results->kv_offset != 0xFFFFFFFFU) {
+        return image.nand_results->kv_offset;
+    }
+
+    const uint32_t header_offset = bswap32(image.header.kv_offset);
+    if (header_offset != 0 && header_offset != 0xFFFFFFFFU) {
+        return header_offset;
+    }
+
+    return std::nullopt;
+}
+
+std::optional<uint32_t> resolve_build_bootloader_chain_offset(const flash_image_t& image) {
+    if (image.nand_results && image.nand_results->cb_or_a.offset != 0 &&
+        image.nand_results->cb_or_a.offset != 0xFFFFFFFFU) {
+        return image.nand_results->cb_or_a.offset;
+    }
+
+    const uint32_t header_offset = bswap32(image.header.entrypoint);
+    if (header_offset != 0 && header_offset != 0xFFFFFFFFU) {
+        return header_offset;
+    }
+
     return std::nullopt;
 }
 
@@ -418,16 +462,24 @@ uint32_t resolve_build_sys_update_addr(const flash_image_t& image) {
 std::optional<build_layout_t> resolve_build_layout(const flash_image_t& image,
                                                    BuildType build_type) {
     build_layout_t layout{};
+    layout.smc_offset = resolve_build_smc_offset(image);
+    layout.kv_offset = resolve_build_kv_offset(image);
+    layout.bootloader_chain_offset = resolve_build_bootloader_chain_offset(image);
+    layout.patchslot_base = resolve_build_patchslot_base(image);
+    layout.patchslot_length = image.driver.patch_slot_length();
+    if (layout.patchslot_base && layout.patchslot_length != 0) {
+        layout.patchslot_1_base = *layout.patchslot_base + layout.patchslot_length;
+    }
 
     if (is_glitch_build(build_type)) {
-        const auto patchslot_base = resolve_build_patchslot_base(image);
-        if (!patchslot_base) {
+        if (!layout.patchslot_base) {
+            return std::nullopt;
+        }
+        if (layout.patchslot_length <= 0x10U) {
             return std::nullopt;
         }
 
-        layout.patchslot_base = *patchslot_base;
-        layout.patchslot_length = image.driver.patch_slot_length();
-        layout.patches_offset = *patchslot_base + layout.patchslot_length + 0x10U;
+        layout.patches_offset = *layout.patchslot_base + layout.patchslot_length + 0x10U;
         layout.patches_region_size = layout.patchslot_length - 0x10U;
         layout.xell_offset = kGlitchXellRawOffset;
         layout.xell_region_size = kXellSlotSize;
@@ -472,6 +524,124 @@ bool write_build_region(gxbuild3::utils::FlashBlockDriver& driver, uint32_t offs
 
     Log::Info("build: wrote {} at 0x{:x} ({} bytes, slot size 0x{:x})", label, offset,
               data.size(), region_size);
+    return true;
+}
+
+bool write_build_blob(gxbuild3::utils::FlashBlockDriver& driver, uint32_t offset,
+                      const std::vector<uint8_t>& data, std::string_view label) {
+    if (!driver.write(offset, data.data(), data.size())) {
+        Log::Error("build: failed to write {} at 0x{:x}", label, offset);
+        return false;
+    }
+
+    Log::Info("build: wrote {} at 0x{:x} ({} bytes)", label, offset, data.size());
+    return true;
+}
+
+bool write_optional_blob(gxbuild3::utils::FlashBlockDriver& driver,
+                         const std::optional<std::vector<uint8_t>>& data,
+                         const std::optional<uint32_t>& offset, std::string_view label) {
+    if (!data) {
+        return true;
+    }
+    if (!offset) {
+        Log::Error("build: no resolved offset for {}", label);
+        return false;
+    }
+    return write_build_blob(driver, *offset, *data, label);
+}
+
+bool write_bootloader_chain_entry(gxbuild3::utils::FlashBlockDriver& driver,
+                                  const std::optional<std::vector<uint8_t>>& data,
+                                  uint32_t& cursor, std::string_view label) {
+    if (!data) {
+        return true;
+    }
+
+    if (!write_build_blob(driver, cursor, *data, label)) {
+        return false;
+    }
+
+    cursor = align_up_0x10(cursor + static_cast<uint32_t>(data->size()));
+    return true;
+}
+
+bool write_patchslot_chain(flash_image_t& image, const patchslot_t& patchslot, uint32_t slot_base,
+                           std::string_view slot_label) {
+    uint32_t cursor = slot_base;
+
+    if (!write_bootloader_chain_entry(image.driver, patchslot.cf, cursor,
+                                      std::string(slot_label) + " CF")) {
+        return false;
+    }
+
+    if (!write_bootloader_chain_entry(image.driver, patchslot.cg, cursor,
+                                      std::string(slot_label) + " CG")) {
+        return false;
+    }
+
+    return true;
+}
+
+bool write_build_bootloaders(flash_image_t& image, BuildType build_type) {
+    const auto layout = resolve_build_layout(image, build_type);
+    if (!layout) {
+        Log::Warn("build: no layout available, skipping bootloader serialization");
+        return true;
+    }
+
+    if (!write_optional_blob(image.driver, image.smc, layout->smc_offset, "SMC")) {
+        return false;
+    }
+
+    if (!write_optional_blob(image.driver, image.keyvault, layout->kv_offset, "Keyvault")) {
+        return false;
+    }
+
+    if (layout->bootloader_chain_offset) {
+        uint32_t cursor = *layout->bootloader_chain_offset;
+        if (!write_bootloader_chain_entry(image.driver, image.cb_or_A, cursor, "CB")) {
+            return false;
+        }
+        if (!write_bootloader_chain_entry(image.driver, image.cb_X, cursor, "CB_X")) {
+            return false;
+        }
+        if (!write_bootloader_chain_entry(image.driver, image.cb_B, cursor, "CB_B")) {
+            return false;
+        }
+        if (!write_bootloader_chain_entry(image.driver, image.sc, cursor, "SC")) {
+            return false;
+        }
+        if (!write_bootloader_chain_entry(image.driver, image.cd, cursor, "CD")) {
+            return false;
+        }
+        if (!write_bootloader_chain_entry(image.driver, image.ce, cursor, "CE")) {
+            return false;
+        }
+    }
+
+    if (image.patchslot_0) {
+        if (!layout->patchslot_base) {
+            Log::Error("build: patchslot 0 data staged but no patchslot base resolved");
+            return false;
+        }
+        if (!write_patchslot_chain(image, *image.patchslot_0, *layout->patchslot_base,
+                                   "patchslot 0")) {
+            return false;
+        }
+    }
+
+    if (image.patchslot_1) {
+        if (!layout->patchslot_1_base) {
+            Log::Error("build: patchslot 1 data staged but no patchslot 1 base resolved");
+            return false;
+        }
+        if (!write_patchslot_chain(image, *image.patchslot_1, *layout->patchslot_1_base,
+                                   "patchslot 1")) {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -1053,6 +1223,10 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
 
 std::vector<uint8_t> build(const flash_image_t& image, BuildType build_type) {
     flash_image_t built = image;
+
+    if (!write_build_bootloaders(built, build_type)) {
+        return built.driver.image_data();
+    }
 
     if (!write_build_jtag_payloads(built, build_type)) {
         return built.driver.image_data();
