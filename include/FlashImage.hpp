@@ -16,6 +16,7 @@
 #include <vector>
 
 enum class BuildType;
+enum class ConsoleType;
 
 // NAND Header structure based on NANDFS.md
 // Note: This appears to start with a bl_header (magic, version, pairing, flags, entrypoint, size)
@@ -206,4 +207,5 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
 
 std::optional<build_layout_t> resolve_build_layout(const flash_image_t& image, BuildType build_type);
 
-std::vector<uint8_t> build(const flash_image_t& image, BuildType build_type);
+std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType build_type,
+                                          std::optional<ConsoleType> console_type = std::nullopt);

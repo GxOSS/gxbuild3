@@ -18,6 +18,17 @@ namespace {
 
 constexpr uint32_t kGlitchXellRawOffset = 0x70000;
 constexpr uint32_t kXellSlotSize = 0x40000;
+constexpr uint32_t kSyntheticSmcOffset = 0x00001000;
+constexpr uint32_t kSyntheticSmcSize = 0x00003000;
+constexpr uint32_t kSyntheticKvOffset = 0x00004000;
+constexpr uint32_t kSyntheticKvSize = 0x00004000;
+constexpr uint32_t kSyntheticBootloaderChainOffset = 0x00008000;
+constexpr uint32_t kSyntheticFsRootBlockDistanceFromReserve = 0x54;
+constexpr uint32_t kSyntheticHeaderVersion = 0x00000760;
+constexpr uint32_t kOldSmallBlockPatchslotBase = 0x00070000;
+constexpr uint32_t kNewSmallBlockPatchslotBase = 0x000B0000;
+constexpr uint32_t kBigBlockPatchslotBase = 0x000C0000;
+constexpr uint32_t kDevkitPatchslotBase = 0x000D0000;
 constexpr uint32_t kJtagPayloadOffset = 0x00000200;
 constexpr uint32_t kJtagPayloadRegionSize = 0x200;
 constexpr uint32_t kJtagFreebootOffset = 0x00090000;
@@ -43,6 +54,221 @@ bool is_glitch_build(BuildType build_type) {
 }
 
 bool is_jtag_build(BuildType build_type) { return build_type == BuildType::Jtag; }
+
+enum class SyntheticNandFamily {
+    OldSmallBlock,
+    NewSmallBlock,
+    BigBlock,
+    Emmc,
+};
+
+struct SyntheticNandTarget {
+    SyntheticNandFamily family;
+    uint32_t image_length;
+    uint32_t flash_config;
+    uint32_t patchslot_base;
+    uint16_t patch_slots;
+};
+
+std::optional<SyntheticNandFamily> resolve_synthetic_nand_family(ConsoleType console_type) {
+    switch (console_type) {
+        case ConsoleType::Xenon:
+        case ConsoleType::Zephyr:
+        case ConsoleType::Falcon:
+            return SyntheticNandFamily::OldSmallBlock;
+
+        case ConsoleType::Jasper:
+        case ConsoleType::Trinity:
+        case ConsoleType::Corona:
+        case ConsoleType::Winchester:
+            return SyntheticNandFamily::NewSmallBlock;
+
+        case ConsoleType::Jasper256:
+        case ConsoleType::Jasper512:
+        case ConsoleType::JasperBB:
+        case ConsoleType::JasperBigFFS:
+        case ConsoleType::TrinityBB:
+        case ConsoleType::TrinityBigFFS:
+            return SyntheticNandFamily::BigBlock;
+
+        case ConsoleType::Corona4G:
+        case ConsoleType::Winchester4G:
+            return SyntheticNandFamily::Emmc;
+    }
+
+    return std::nullopt;
+}
+
+const char* describe_synthetic_nand_family(SyntheticNandFamily family) {
+    switch (family) {
+        case SyntheticNandFamily::OldSmallBlock:
+            return "old small-block";
+        case SyntheticNandFamily::NewSmallBlock:
+            return "new small-block";
+        case SyntheticNandFamily::BigBlock:
+            return "big-block";
+        case SyntheticNandFamily::Emmc:
+            return "eMMC";
+    }
+
+    return "unknown";
+}
+
+std::optional<SyntheticNandTarget> resolve_synthetic_target(std::optional<ConsoleType> console_type,
+                                                            BuildType build_type) {
+    if (!console_type) {
+        Log::Error("build: console type is required to synthesize a NAND image");
+        return std::nullopt;
+    }
+
+    const auto family = resolve_synthetic_nand_family(*console_type);
+    if (!family) {
+        Log::Error("build: console type is unsupported for NAND synthesis");
+        return std::nullopt;
+    }
+
+    switch (*family) {
+        case SyntheticNandFamily::OldSmallBlock:
+            return SyntheticNandTarget{
+                .family = *family,
+                .image_length = build_type == BuildType::Devkit ? 0x04000000U : 0x01000000U,
+                .flash_config = build_type == BuildType::Devkit
+                                    ? gxbuild3::utils::FlashConfig::AllOther64M
+                                    : gxbuild3::utils::FlashConfig::AllOther16M,
+                .patchslot_base =
+                    build_type == BuildType::Devkit ? kDevkitPatchslotBase : kOldSmallBlockPatchslotBase,
+                .patch_slots = 2U,
+            };
+
+        case SyntheticNandFamily::NewSmallBlock:
+            return SyntheticNandTarget{
+                .family = *family,
+                .image_length = build_type == BuildType::Devkit ? 0x04000000U : 0x01000000U,
+                .flash_config = build_type == BuildType::Devkit
+                                    ? gxbuild3::utils::FlashConfig::Jasper64M_NewSB
+                                    : gxbuild3::utils::FlashConfig::Jasper16M_NewSB,
+                .patchslot_base = kNewSmallBlockPatchslotBase,
+                .patch_slots = 2U,
+            };
+
+        case SyntheticNandFamily::BigBlock:
+            return SyntheticNandTarget{
+                .family = *family,
+                .image_length = 0x04000000U,
+                .flash_config = gxbuild3::utils::FlashConfig::Jasper256_512_LargeBlock,
+                .patchslot_base = kBigBlockPatchslotBase,
+                .patch_slots = 2U,
+            };
+
+        case SyntheticNandFamily::Emmc:
+            if (build_type == BuildType::Devkit) {
+                Log::Warn("build: ignoring devkit 64MB size override for eMMC console type");
+            }
+            return SyntheticNandTarget{
+                .family = *family,
+                .image_length = 0x03000000U,
+                .flash_config = gxbuild3::utils::FlashConfig::Corona4GB,
+                .patchslot_base = kNewSmallBlockPatchslotBase,
+                .patch_slots = 2U,
+            };
+    }
+
+    return std::nullopt;
+}
+
+uint32_t resolve_synthetic_fs_offset(const gxbuild3::utils::FlashBlockDriver& driver) {
+    if (driver.reserve_block_idx() < kSyntheticFsRootBlockDistanceFromReserve) {
+        return driver.fs_offset();
+    }
+
+    const uint32_t root_block_idx =
+        driver.reserve_block_idx() - kSyntheticFsRootBlockDistanceFromReserve;
+    return root_block_idx * driver.lil_block_length();
+}
+
+uint32_t resolve_synthetic_header_version(const flash_image_t& image) {
+    const uint32_t current_version = bswap16(image.header.version);
+    if (current_version != 0) {
+        return current_version;
+    }
+
+    return kSyntheticHeaderVersion;
+}
+
+uint32_t resolve_synthetic_smc_config_offset(const gxbuild3::utils::FlashBlockDriver& driver) {
+    if (driver.flash_config() == gxbuild3::utils::FlashConfig::Corona4GB) {
+        return 0;
+    }
+
+    const uint64_t offset =
+        static_cast<uint64_t>(driver.reserve_block_idx()) * driver.block_length();
+    if (offset < 0x4000U) {
+        return 0;
+    }
+
+    return static_cast<uint32_t>(offset - 0x4000U);
+}
+
+raw_nand_header_t create_synthetic_header(const flash_image_t& image,
+                                          const gxbuild3::utils::FlashBlockDriver& driver,
+                                          const SyntheticNandTarget& target) {
+    raw_nand_header_t header{};
+    header.magic = bswap16(0xFF4FU);
+    header.version = bswap16(static_cast<uint16_t>(resolve_synthetic_header_version(image)));
+    header.entrypoint = bswap32(kSyntheticBootloaderChainOffset);
+    header.size = bswap32(sizeof(raw_nand_header_t));
+    header.kv_size = bswap32(static_cast<uint32_t>(image.keyvault ? image.keyvault->size()
+                                                                  : kSyntheticKvSize));
+    header.cf1_offset = bswap32(target.patchslot_base);
+    header.patch_slots = bswap16(target.patch_slots);
+    header.kv_offset = bswap32(kSyntheticKvOffset);
+    header.fs_offset = bswap32(resolve_synthetic_fs_offset(driver));
+    header.smc_config_offset = bswap32(resolve_synthetic_smc_config_offset(driver));
+    header.smc_size = bswap32(static_cast<uint32_t>(image.smc ? image.smc->size() : kSyntheticSmcSize));
+    header.smc_offset = bswap32(kSyntheticSmcOffset);
+    return header;
+}
+
+bool write_raw_nand_header(gxbuild3::utils::FlashBlockDriver& driver, const raw_nand_header_t& header) {
+    return driver.write(0, reinterpret_cast<const uint8_t*>(&header), sizeof(header));
+}
+
+bool has_backing_image(const flash_image_t& image) {
+    return image.driver.image_length_real() != 0 && !image.driver.image_data().empty();
+}
+
+bool ensure_build_backing_image(flash_image_t& image, BuildType build_type,
+                                std::optional<ConsoleType> console_type) {
+    if (has_backing_image(image)) {
+        return true;
+    }
+
+    const auto target = resolve_synthetic_target(console_type, build_type);
+    if (!target) {
+        return false;
+    }
+
+    if (!image.driver.create_image(target->image_length, target->flash_config)) {
+        Log::Error("build: failed to synthesize NAND backing image");
+        return false;
+    }
+
+    std::fill(image.driver.image_data().begin(), image.driver.image_data().end(), 0xFF);
+    image.driver.init_spare();
+    image.header = create_synthetic_header(image, image.driver, *target);
+    image.nand_results.reset();
+    image.filesystem.reset();
+
+    if (!write_raw_nand_header(image.driver, image.header)) {
+        Log::Error("build: failed to write synthetic NAND header");
+        return false;
+    }
+
+    Log::Info("build: synthesized fresh {} NAND backing image (length 0x{:X}, flash config 0x{:08X})",
+              describe_synthetic_nand_family(target->family), target->image_length,
+              target->flash_config);
+    return true;
+}
 
 std::optional<uint32_t> resolve_build_patchslot_base(const flash_image_t& image) {
     if (image.nand_results && image.nand_results->cf0) {
@@ -487,6 +713,9 @@ std::optional<build_layout_t> resolve_build_layout(const flash_image_t& image,
     }
 
     if (is_jtag_build(build_type)) {
+        if (!layout.patchslot_base) {
+            return std::nullopt;
+        }
         layout.payload_offset = kJtagPayloadOffset;
         layout.payload_region_size = kJtagPayloadRegionSize;
         layout.freeboot_offset = kJtagFreebootOffset;
@@ -497,6 +726,10 @@ std::optional<build_layout_t> resolve_build_layout(const flash_image_t& image,
         layout.fuses_region_size = kJtagFusesRegionSize;
         layout.xell_offset = kJtagXellOffset;
         layout.xell_region_size = kXellSlotSize;
+        return layout;
+    }
+
+    if (layout.patchslot_base) {
         return layout;
     }
 
@@ -1221,34 +1454,40 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
     return true;
 }
 
-std::vector<uint8_t> build(const flash_image_t& image, BuildType build_type) {
+std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType build_type,
+                                          std::optional<ConsoleType> console_type) {
     flash_image_t built = image;
+    const bool had_backing_image = has_backing_image(image);
+
+    if (!ensure_build_backing_image(built, build_type, console_type)) {
+        return std::nullopt;
+    }
 
     if (!write_build_bootloaders(built, build_type)) {
-        return built.driver.image_data();
+        return std::nullopt;
     }
 
     if (!write_build_jtag_payloads(built, build_type)) {
-        return built.driver.image_data();
+        return std::nullopt;
     }
 
     if (!write_build_addon_patches(built, build_type)) {
-        return built.driver.image_data();
+        return std::nullopt;
     }
 
     if (!write_build_xell(built, build_type)) {
-        return built.driver.image_data();
+        return std::nullopt;
     }
 
     const auto payloads = collect_build_flashfs_payloads(built);
-    if (payloads.empty()) {
+    if (payloads.empty() && had_backing_image) {
         return built.driver.image_data();
     }
 
     auto fs_block_idx = resolve_build_fs_block_idx(built, built.driver);
     if (!fs_block_idx) {
-        Log::Warn("build: no FlashFS root block index available, skipping filesystem build");
-        return built.driver.image_data();
+        Log::Error("build: no FlashFS root block index available");
+        return std::nullopt;
     }
 
     const uint32_t fs_version = resolve_build_fs_version(built);
@@ -1260,25 +1499,25 @@ std::vector<uint8_t> build(const flash_image_t& image, BuildType build_type) {
     if (!filesystem.create_defaults(*fs_block_idx, fs_version, sys_update_addr,
                                     built.xconfig.has_value())) {
         Log::Error("build: failed to initialize FlashFS defaults");
-        return built.driver.image_data();
+        return std::nullopt;
     }
 
     for (const auto& [filename, data] : payloads) {
         gxbuild3::bootloaders::FlashFileSystemEntry* entry = nullptr;
         if (!filesystem.add_file(filename, entry) || entry == nullptr) {
             Log::Error("build: failed to add FlashFS file '{}'", filename);
-            return built.driver.image_data();
+            return std::nullopt;
         }
 
         if (!filesystem.set_file_data(*entry, data)) {
             Log::Error("build: failed to write FlashFS file '{}'", filename);
-            return built.driver.image_data();
+            return std::nullopt;
         }
     }
 
     if (!filesystem.save(*fs_block_idx)) {
         Log::Error("build: failed to save FlashFS");
-        return built.driver.image_data();
+        return std::nullopt;
     }
 
     built.driver = *fs_driver;

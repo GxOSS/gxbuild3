@@ -1074,6 +1074,44 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                           ensure_payloads().addon_patches->size());
             }
         }
+
+        if (!args.build_type) {
+            Log::Error("Build type is required for image serialization");
+            return 1;
+        }
+
+        if (!args.output) {
+            Log::Error("Build output path is required");
+            return 1;
+        }
+
+        if (!args.console) {
+            Log::Error("Console type is required for image serialization");
+            return 1;
+        }
+
+        std::filesystem::path output_path = *args.output;
+        if (args.output_dir && output_path.is_relative()) {
+            output_path = *args.output_dir / output_path;
+        }
+
+        if (output_path.has_parent_path()) {
+            std::filesystem::create_directories(output_path.parent_path());
+        }
+
+        Log::Info("Building NAND image to '{}'...", output_path.string());
+        const auto built_image = build(new_nand, *args.build_type, args.console);
+        if (!built_image) {
+            Log::Error("Failed to build NAND image");
+            return 1;
+        }
+
+        if (!WriteFile(output_path, AsByteSpan(*built_image))) {
+            Log::Error("Failed to write built NAND image: {}", output_path.string());
+            return 1;
+        }
+
+        Log::Info("Built NAND image '{}' ({} bytes)", output_path.string(), built_image->size());
     }
 
     return 0;
