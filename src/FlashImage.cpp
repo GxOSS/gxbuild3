@@ -114,6 +114,21 @@ const char* describe_synthetic_nand_family(SyntheticNandFamily family) {
     return "unknown";
 }
 
+const char* describe_build_type(BuildType build_type) {
+    switch (build_type) {
+        case BuildType::Retail: return "retail";
+        case BuildType::Glitch: return "glitch";
+        case BuildType::Jtag: return "jtag";
+        case BuildType::Glitch2: return "glitch2";
+        case BuildType::Glitch2m: return "glitch2m";
+        case BuildType::Glitch3: return "glitch3";
+        case BuildType::Devkit: return "devkit";
+        // case BuildType::DevGL: return "devgl";
+    }
+
+    return "unknown";
+}
+
 std::optional<SyntheticNandTarget> resolve_synthetic_target(std::optional<ConsoleType> console_type,
                                                             BuildType build_type) {
     if (!console_type) {
@@ -240,6 +255,8 @@ bool has_backing_image(const flash_image_t& image) {
 bool ensure_build_backing_image(flash_image_t& image, BuildType build_type,
                                 std::optional<ConsoleType> console_type) {
     if (has_backing_image(image)) {
+        Log::Info("build: using parsed NAND backing image (length 0x{:x}, flash config 0x{:08x})",
+                  image.driver.image_length_real(), image.driver.flash_config());
         return true;
     }
 
@@ -264,7 +281,7 @@ bool ensure_build_backing_image(flash_image_t& image, BuildType build_type,
         return false;
     }
 
-    Log::Info("build: synthesized fresh {} NAND backing image (length 0x{:X}, flash config 0x{:08X})",
+    Log::Info("build: synthesized fresh {} NAND backing image (length 0x{:x}, flash config 0x{:08x})",
               describe_synthetic_nand_family(target->family), target->image_length,
               target->flash_config);
     return true;
@@ -738,6 +755,71 @@ std::optional<build_layout_t> resolve_build_layout(const flash_image_t& image,
 
 namespace {
 
+size_t optional_blob_size(const std::optional<std::vector<uint8_t>>& data) {
+    return data ? data->size() : 0U;
+}
+
+size_t count_flashfs_payloads(const flashfs_payload_map_t& payloads) {
+    return payloads.size();
+}
+
+size_t total_flashfs_payload_bytes(const flashfs_payload_map_t& payloads) {
+    size_t total = 0;
+    for (const auto& [_, data] : payloads) {
+        total += data.size();
+    }
+    return total;
+}
+
+void log_build_layout(const build_layout_t& layout, BuildType build_type) {
+    Log::Info(
+        "build: layout for {} -> smc=0x{:x}, kv=0x{:x}, chain=0x{:x}, patchslot0=0x{:x}, patchslot1=0x{:x}, patchlen=0x{:x}",
+        describe_build_type(build_type), layout.smc_offset.value_or(0), layout.kv_offset.value_or(0),
+        layout.bootloader_chain_offset.value_or(0), layout.patchslot_base.value_or(0),
+        layout.patchslot_1_base.value_or(0), layout.patchslot_length);
+
+    if (layout.payload_offset || layout.freeboot_offset || layout.patches_offset ||
+        layout.fuses_offset || layout.xell_offset) {
+        Log::Info(
+            "build: payload layout -> payload=0x{:x}/0x{:x}, freeboot=0x{:x}/0x{:x}, patches=0x{:x}/0x{:x}, fuses=0x{:x}/0x{:x}, xell=0x{:x}/0x{:x}",
+            layout.payload_offset.value_or(0), layout.payload_region_size.value_or(0),
+            layout.freeboot_offset.value_or(0), layout.freeboot_region_size.value_or(0),
+            layout.patches_offset.value_or(0), layout.patches_region_size.value_or(0),
+            layout.fuses_offset.value_or(0), layout.fuses_region_size.value_or(0),
+            layout.xell_offset.value_or(0), layout.xell_region_size.value_or(0));
+    }
+}
+
+void log_staged_build_inputs(const flash_image_t& image, BuildType build_type) {
+    Log::Info(
+        "build: staged inputs for {} -> smc=0x{:x}, kv=0x{:x}, cb=0x{:x}, cbx=0x{:x}, cbb=0x{:x}, sc=0x{:x}, cd=0x{:x}, ce=0x{:x}",
+        describe_build_type(build_type), optional_blob_size(image.smc), optional_blob_size(image.keyvault),
+        optional_blob_size(image.cb_or_A), optional_blob_size(image.cb_X),
+        optional_blob_size(image.cb_B), optional_blob_size(image.sc), optional_blob_size(image.cd),
+        optional_blob_size(image.ce));
+
+    if (image.patchslot_0 || image.patchslot_1) {
+        Log::Info(
+            "build: staged patchslots -> slot0(cf=0x{:x}, cg=0x{:x}), slot1(cf=0x{:x}, cg=0x{:x})",
+            image.patchslot_0 ? optional_blob_size(image.patchslot_0->cf) : 0U,
+            image.patchslot_0 ? optional_blob_size(image.patchslot_0->cg) : 0U,
+            image.patchslot_1 ? optional_blob_size(image.patchslot_1->cf) : 0U,
+            image.patchslot_1 ? optional_blob_size(image.patchslot_1->cg) : 0U);
+    }
+
+    if (image.payloads) {
+        Log::Info(
+            "build: staged payloads -> patches=0x{:x}, payload=0x{:x}, freeboot=0x{:x}, fuses=0x{:x}, xell=0x{:x}",
+            optional_blob_size(image.payloads->addon_patches),
+            optional_blob_size(image.payloads->jtag_payload),
+            optional_blob_size(image.payloads->jtag_rebooter),
+            optional_blob_size(image.payloads->vfuses),
+            image.xellblock ? optional_blob_size(image.xellblock->xell_main) : 0U);
+    } else if (image.xellblock && image.xellblock->xell_main) {
+        Log::Info("build: staged payloads -> xell=0x{:x}", image.xellblock->xell_main->size());
+    }
+}
+
 bool write_build_region(gxbuild3::utils::FlashBlockDriver& driver, uint32_t offset,
                         uint32_t region_size, const std::vector<uint8_t>& data,
                         std::string_view label) {
@@ -750,24 +832,29 @@ bool write_build_region(gxbuild3::utils::FlashBlockDriver& driver, uint32_t offs
     std::vector<uint8_t> region(region_size, 0xFF);
     std::memcpy(region.data(), data.data(), data.size());
 
+    Log::Info("Writing {} to image offset 0x{:x} len 0x{:x} (end 0x{:x})...", label, offset,
+              region_size, offset + region_size);
     if (!driver.write(offset, region.data(), region.size())) {
         Log::Error("build: failed to write {} at 0x{:x}", label, offset);
         return false;
     }
 
-    Log::Info("build: wrote {} at 0x{:x} ({} bytes, slot size 0x{:x})", label, offset,
-              data.size(), region_size);
+    Log::Info("Writing {} to image offset 0x{:x} len 0x{:x} (end 0x{:x})...done! data len 0x{:x}",
+              label, offset, region_size, offset + region_size, data.size());
     return true;
 }
 
 bool write_build_blob(gxbuild3::utils::FlashBlockDriver& driver, uint32_t offset,
                       const std::vector<uint8_t>& data, std::string_view label) {
+    Log::Info("Writing {} to image offset 0x{:x} len 0x{:x} (end 0x{:x})...", label, offset,
+              data.size(), offset + static_cast<uint32_t>(data.size()));
     if (!driver.write(offset, data.data(), data.size())) {
         Log::Error("build: failed to write {} at 0x{:x}", label, offset);
         return false;
     }
 
-    Log::Info("build: wrote {} at 0x{:x} ({} bytes)", label, offset, data.size());
+    Log::Info("Writing {} to image offset 0x{:x} len 0x{:x} (end 0x{:x})...done!", label, offset,
+              data.size(), offset + static_cast<uint32_t>(data.size()));
     return true;
 }
 
@@ -802,6 +889,7 @@ bool write_bootloader_chain_entry(gxbuild3::utils::FlashBlockDriver& driver,
 bool write_patchslot_chain(flash_image_t& image, const patchslot_t& patchslot, uint32_t slot_base,
                            std::string_view slot_label) {
     uint32_t cursor = slot_base;
+    Log::Info("build: serializing {} from base 0x{:x}", slot_label, slot_base);
 
     if (!write_bootloader_chain_entry(image.driver, patchslot.cf, cursor,
                                       std::string(slot_label) + " CF")) {
@@ -823,6 +911,8 @@ bool write_build_bootloaders(flash_image_t& image, BuildType build_type) {
         return true;
     }
 
+    log_build_layout(*layout, build_type);
+
     if (!write_optional_blob(image.driver, image.smc, layout->smc_offset, "SMC")) {
         return false;
     }
@@ -833,6 +923,7 @@ bool write_build_bootloaders(flash_image_t& image, BuildType build_type) {
 
     if (layout->bootloader_chain_offset) {
         uint32_t cursor = *layout->bootloader_chain_offset;
+        Log::Info("build: serializing early bootloader chain from 0x{:x}", cursor);
         if (!write_bootloader_chain_entry(image.driver, image.cb_or_A, cursor, "CB")) {
             return false;
         }
@@ -939,6 +1030,17 @@ bool write_build_jtag_payloads(flash_image_t& image, BuildType build_type) {
     }
 
     return true;
+}
+
+void log_flashfs_plan(const flash_image_t& image, const flashfs_payload_map_t& payloads,
+                      uint16_t fs_block_idx, uint32_t fs_version, uint32_t sys_update_addr) {
+    Log::Info(
+        "build: FlashFS root block 0x{:x}, version {}, sysupdate 0x{:x}, xconfig={}, payload files={}, payload bytes=0x{:x}",
+        fs_block_idx, fs_version, sys_update_addr, image.xconfig.has_value() ? "yes" : "no",
+        count_flashfs_payloads(payloads), total_flashfs_payload_bytes(payloads));
+    for (const auto& [filename, data] : payloads) {
+        Log::Info("build: FlashFS file '{}' staged (0x{:x} bytes)", filename, data.size());
+    }
 }
 
 } // namespace
@@ -1459,6 +1561,10 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
     flash_image_t built = image;
     const bool had_backing_image = has_backing_image(image);
 
+    Log::Info("build: starting {} image build{}", describe_build_type(build_type),
+              had_backing_image ? " on parsed NAND" : " on synthesized NAND");
+    log_staged_build_inputs(built, build_type);
+
     if (!ensure_build_backing_image(built, build_type, console_type)) {
         return std::nullopt;
     }
@@ -1481,6 +1587,7 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
 
     const auto payloads = collect_build_flashfs_payloads(built);
     if (payloads.empty() && had_backing_image) {
+        Log::Info("build: no FlashFS payload changes staged, returning rebuilt donor image");
         return built.driver.image_data();
     }
 
@@ -1492,34 +1599,44 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
 
     const uint32_t fs_version = resolve_build_fs_version(built);
     const uint32_t sys_update_addr = resolve_build_sys_update_addr(built);
+    log_flashfs_plan(built, payloads, *fs_block_idx, fs_version, sys_update_addr);
 
     auto fs_driver = std::make_shared<gxbuild3::utils::FlashBlockDriver>(built.driver);
     gxbuild3::bootloaders::FlashFileSystem filesystem(fs_driver);
 
+    Log::Info("Initializing FlashFS defaults at block 0x{:x}...", *fs_block_idx);
     if (!filesystem.create_defaults(*fs_block_idx, fs_version, sys_update_addr,
                                     built.xconfig.has_value())) {
         Log::Error("build: failed to initialize FlashFS defaults");
         return std::nullopt;
     }
+    Log::Info("Initializing FlashFS defaults at block 0x{:x}...done!", *fs_block_idx);
 
     for (const auto& [filename, data] : payloads) {
         gxbuild3::bootloaders::FlashFileSystemEntry* entry = nullptr;
+        Log::Info("Adding FlashFS file '{}'...", filename);
         if (!filesystem.add_file(filename, entry) || entry == nullptr) {
             Log::Error("build: failed to add FlashFS file '{}'", filename);
             return std::nullopt;
         }
 
+        Log::Info("Writing FlashFS file '{}' len 0x{:x}...", filename, data.size());
         if (!filesystem.set_file_data(*entry, data)) {
             Log::Error("build: failed to write FlashFS file '{}'", filename);
             return std::nullopt;
         }
+        Log::Info("Writing FlashFS file '{}' len 0x{:x}...done!", filename, data.size());
     }
 
+    Log::Info("Saving FlashFS to block 0x{:x}...", *fs_block_idx);
     if (!filesystem.save(*fs_block_idx)) {
         Log::Error("build: failed to save FlashFS");
         return std::nullopt;
     }
+    Log::Info("Saving FlashFS to block 0x{:x}...done!", *fs_block_idx);
 
     built.driver = *fs_driver;
+    Log::Info("build: image serialization complete (0x{:x} bytes)",
+              built.driver.image_data().size());
     return built.driver.image_data();
 }

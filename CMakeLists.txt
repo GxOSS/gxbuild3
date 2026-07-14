@@ -34,6 +34,7 @@ add_executable(gxbuild3
     src/bootloaders/FlashFileSystem.cpp
     src/bootloaders/Keyvault.cpp
     src/bootloaders/SMC.cpp
+    src/bootloaders/Xboxupd.cpp
     src/bootloaders/XConfig.cpp
 )
 

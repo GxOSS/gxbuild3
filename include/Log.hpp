@@ -15,12 +15,17 @@ class Log {
         s_Logger = std::make_shared<spdlog::logger>("GxBuild3", console_sink);
         spdlog::register_logger(s_Logger);
 
-#ifdef NDEBUG
-        s_Logger->set_level(spdlog::level::info);
-#else
-        s_Logger->set_level(spdlog::level::trace);
-#endif
+        s_Logger->set_level(DefaultLevel());
         s_Logger->flush_on(spdlog::level::err);
+    }
+
+    static void SetLevel(spdlog::level::level_enum level) {
+        assert(s_Logger && "Log::Init() not called");
+        s_Logger->set_level(level);
+    }
+
+    static void SetVerbose(bool verbose) {
+        SetLevel(verbose ? spdlog::level::trace : DefaultLevel());
     }
 
     static void Shutdown() {
@@ -59,5 +64,13 @@ class Log {
     }
 
   private:
+    static constexpr spdlog::level::level_enum DefaultLevel() {
+#ifdef NDEBUG
+        return spdlog::level::info;
+#else
+        return spdlog::level::trace;
+#endif
+    }
+
     static std::shared_ptr<spdlog::logger> s_Logger;
 };

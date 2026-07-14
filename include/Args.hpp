@@ -86,6 +86,7 @@ struct GxArgs {
     bool xsb{false};
     bool full_image{false};
     bool bigblock{false};
+    bool verbose{false};
     bool extract_all{false};
     bool stfs_split_xboxupd{false};
     bool license{false};

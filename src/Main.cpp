@@ -5,6 +5,7 @@
 #include "Utils.hpp"
 #include "bootloaders/2bl.hpp"
 #include "bootloaders/Keyvault.hpp"
+#include "bootloaders/Xboxupd.hpp"
 #include "patchers/BinaryParser.hpp"
 #include "patchers/Patcher.hpp"
 #include "ini/IniParser.hpp"
@@ -128,6 +129,7 @@ int main(int argc, char** argv) {
     app.add_flag("-x,--xsb", args.xsb)->description("Enable XSB mode");
     app.add_flag("--fullimage", args.full_image)->description("Build full image");
     app.add_flag("--bigblock", args.bigblock)->description("Use big block layout");
+    app.add_flag("-v,--verbose", args.verbose)->description("Enable verbose trace logging");
     app.add_flag("--license", args.license)->description("Show license information");
 
     app.add_option("-o,--options", "Semicolon-separated key=value option overrides")
@@ -163,6 +165,8 @@ int main(int argc, char** argv) {
     } catch (const CLI::ParseError& e) {
         return app.exit(e);
     }
+
+    Log::SetVerbose(args.verbose);
 
     if (args.license) {
         std::cout << R"(Copyright (c) 2026, GxOSS
@@ -436,6 +440,122 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 return loaded;
             }
             return std::nullopt;
+        };
+
+        std::optional<gxbuild3::bootloaders::XboxupdParts> cached_xboxupd_parts;
+        bool tried_loading_xboxupd = false;
+        auto load_xboxupd_parts = [&]() -> std::optional<gxbuild3::bootloaders::XboxupdParts> {
+            if (tried_loading_xboxupd) {
+                return cached_xboxupd_parts;
+            }
+            tried_loading_xboxupd = true;
+
+            auto try_parse = [&](const std::filesystem::path& source_path,
+                                 const std::vector<uint8_t>& xboxupd_data)
+                -> std::optional<gxbuild3::bootloaders::XboxupdParts> {
+                try {
+                    auto parts = gxbuild3::bootloaders::split_xboxupd_raw(
+                        std::span<const uint8_t>(xboxupd_data.data(), xboxupd_data.size()));
+                    Log::Info("Parsed xboxupd '{}' into CF ({} bytes) and CG ({} bytes)",
+                              source_path.string(), parts.cf_raw.size(), parts.cg_raw.size());
+                    return parts;
+                } catch (const std::exception& ex) {
+                    Log::Warn("Failed to parse xboxupd '{}': {}", source_path.string(), ex.what());
+                    return std::nullopt;
+                }
+            };
+
+            auto try_load_xboxupd_file = [&](const std::filesystem::path& candidate_path)
+                -> std::optional<gxbuild3::bootloaders::XboxupdParts> {
+                auto xboxupd_data = ReadFile(candidate_path);
+                if (!xboxupd_data) {
+                    return std::nullopt;
+                }
+                return try_parse(candidate_path, *xboxupd_data);
+            };
+
+            if (args.xboxupd) {
+                if (args.xboxupd->is_absolute()) {
+                    if (auto parts = try_load_xboxupd_file(*args.xboxupd)) {
+                        cached_xboxupd_parts = std::move(*parts);
+                        return cached_xboxupd_parts;
+                    }
+                } else {
+                    if (auto parts = try_load_xboxupd_file(fw_dir / *args.xboxupd)) {
+                        cached_xboxupd_parts = std::move(*parts);
+                        return cached_xboxupd_parts;
+                    }
+                    if (auto parts = try_load_xboxupd_file(data_dir / *args.xboxupd)) {
+                        cached_xboxupd_parts = std::move(*parts);
+                        return cached_xboxupd_parts;
+                    }
+                    if (common_dir) {
+                        if (auto parts = try_load_xboxupd_file(*common_dir / *args.xboxupd)) {
+                            cached_xboxupd_parts = std::move(*parts);
+                            return cached_xboxupd_parts;
+                        }
+                    }
+                }
+            }
+
+            if (stfs_files) {
+                const auto stfs_it = stfs_files->find(normalize_file_key("xboxupd.bin"));
+                if (stfs_it != stfs_files->end()) {
+                    std::vector<uint8_t> xboxupd_data;
+                    xboxupd_data.reserve(stfs_it->second.size());
+                    for (const auto byte : stfs_it->second) {
+                        xboxupd_data.push_back(std::to_integer<uint8_t>(byte));
+                    }
+
+                    if (auto parts =
+                            try_parse(std::filesystem::path{"<stfs>/xboxupd.bin"}, xboxupd_data)) {
+                        cached_xboxupd_parts = std::move(*parts);
+                        return cached_xboxupd_parts;
+                    }
+                }
+            }
+
+            if (auto parts = try_load_xboxupd_file(fw_dir / "xboxupd.bin")) {
+                cached_xboxupd_parts = std::move(*parts);
+                return cached_xboxupd_parts;
+            }
+            if (auto parts = try_load_xboxupd_file(data_dir / "xboxupd.bin")) {
+                cached_xboxupd_parts = std::move(*parts);
+                return cached_xboxupd_parts;
+            }
+            if (common_dir) {
+                if (auto parts = try_load_xboxupd_file(*common_dir / "xboxupd.bin")) {
+                    cached_xboxupd_parts = std::move(*parts);
+                    return cached_xboxupd_parts;
+                }
+            }
+
+            return std::nullopt;
+        };
+
+        auto load_stage_or_xboxupd = [&](std::string_view entry_name) -> std::optional<resolved_file_t> {
+            if (auto loaded = load_main_section_file(entry_name)) {
+                return loaded;
+            }
+
+            std::string basename = entry_to_lookup_path(entry_name).filename().string();
+            std::transform(basename.begin(), basename.end(), basename.begin(), ::tolower);
+
+            const bool wants_cf = basename.starts_with("cf");
+            const bool wants_cg = basename.starts_with("cg");
+            if (!wants_cf && !wants_cg) {
+                return std::nullopt;
+            }
+
+            const auto xboxupd_parts = load_xboxupd_parts();
+            if (!xboxupd_parts) {
+                return std::nullopt;
+            }
+
+            const auto source_path = std::filesystem::path{
+                wants_cf ? "<xboxupd>/cf.bin" : "<xboxupd>/cg.bin"};
+            return resolved_file_t{source_path, wants_cf ? xboxupd_parts->cf_raw
+                                                         : xboxupd_parts->cg_raw};
         };
 
         auto load_xell_file = [&]() -> std::optional<resolved_file_t> {
@@ -804,11 +924,50 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             xe_section.identifier = section->identifier;
             xe_section.entries = section->entries;
 
+            size_t total_patch_words = 0;
+            uint64_t required_end = bytes.size();
+            for (const auto& entry : section->entries) {
+                total_patch_words += entry.length;
+                const uint64_t entry_end =
+                    static_cast<uint64_t>(entry.address) + static_cast<uint64_t>(entry.length) * 4U;
+                required_end = std::max(required_end, entry_end);
+            }
+
+            Log::Info(
+                "Applying {} patch section '{}' (entries={}, patch_words=0x{:x}, patch_bytes=0x{:x}, target_buffer=0x{:x})",
+                stage_name, section->identifier, section->entries.size(), total_patch_words,
+                total_patch_words * sizeof(uint32_t), bytes.size());
+
+            if (required_end > bytes.size()) {
+                Log::Info(
+                    "Extending {} patch target buffer for section '{}' from 0x{:x} to 0x{:x}",
+                    stage_name, section->identifier, bytes.size(), required_end);
+                bytes.resize(static_cast<size_t>(required_end), 0x00);
+            }
+
             if (!XePatch::ApplyPatchSection(bytes.data(), static_cast<uint32_t>(bytes.size()),
                                             xe_section)) {
-                Log::Error("Failed to apply {} patch section '{}'", stage_name,
-                           section->identifier);
+                Log::Error(
+                    "Failed to apply {} patch section '{}' (entries={}, patch_words=0x{:x}, patch_bytes=0x{:x}, target_buffer=0x{:x})",
+                    stage_name, section->identifier, section->entries.size(), total_patch_words,
+                    total_patch_words * sizeof(uint32_t), bytes.size());
                 return false;
+            }
+
+            if (bytes.size() >= sizeof(bl_header)) {
+                uint32_t raw_declared_size = 0;
+                std::memcpy(&raw_declared_size, bytes.data() + offsetof(bl_header, size),
+                            sizeof(raw_declared_size));
+                const uint32_t declared_size = bswap32(raw_declared_size);
+                if (declared_size < bytes.size()) {
+                    const uint32_t updated_size = static_cast<uint32_t>(bytes.size());
+                    raw_declared_size = bswap32(updated_size);
+                    std::memcpy(bytes.data() + offsetof(bl_header, size), &raw_declared_size,
+                                sizeof(raw_declared_size));
+                    Log::Info(
+                        "Updated {} serialized size field after patching from 0x{:x} to 0x{:x}",
+                        stage_name, declared_size, updated_size);
+                }
             }
 
             Log::Info("Applied {} patch section '{}'", stage_name, section->identifier);
@@ -933,7 +1092,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 if (key_lower == "none")
                     continue;
 
-                auto resolved_stage = load_main_section_file(entry.key);
+                auto resolved_stage = load_stage_or_xboxupd(entry.key);
                 if (!resolved_stage) {
                     Log::Warn("Stage file '{}' not found in fw/data/common directories",
                               entry.key);
@@ -1081,14 +1240,25 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         }
 
         if (!args.output) {
-            Log::Error("Build output path is required");
-            return 1;
+            args.output = std::filesystem::path{"updflash.bin"};
+            Log::Info("No build output path provided, defaulting to '{}'", args.output->string());
         }
 
         if (!args.console) {
             Log::Error("Console type is required for image serialization");
             return 1;
         }
+
+        Log::Info(
+            "Build preparation complete: donor={}, smc={}, kv={}, cb={}, cbx={}, cbb={}, sc={}, cd={}, ce={}, patchslot0={}, patchslot1={}, payloads={}, xell={}, flashfs_files={}, flashfs_payloads={}",
+            donor_nand.has_value() ? "yes" : "no", new_nand.smc ? "yes" : "no",
+            new_nand.keyvault ? "yes" : "no", new_nand.cb_or_A ? "yes" : "no",
+            new_nand.cb_X ? "yes" : "no", new_nand.cb_B ? "yes" : "no",
+            new_nand.sc ? "yes" : "no", new_nand.cd ? "yes" : "no",
+            new_nand.ce ? "yes" : "no", new_nand.patchslot_0 ? "yes" : "no",
+            new_nand.patchslot_1 ? "yes" : "no", new_nand.payloads ? "yes" : "no",
+            (new_nand.xellblock && new_nand.xellblock->xell_main) ? "yes" : "no",
+            new_nand.flashfs_files ? "yes" : "no", new_nand.flashfs_payloads ? "yes" : "no");
 
         std::filesystem::path output_path = *args.output;
         if (args.output_dir && output_path.is_relative()) {
