@@ -17,4 +17,5 @@ class BootloaderCg {
 
     bool is_decrypted() const;
     std::vector<uint8_t> serialize() const;
+    std::vector<uint8_t> split(size_t limit);
 };
