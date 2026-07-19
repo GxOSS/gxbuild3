@@ -211,7 +211,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
     if (args.mode == "build") {
         if (!args.data_dir) {
             args.data_dir = cwd / "17559";
-            if (!std::filesystem::exists(args.data_dir)) {
+            if (!std::filesystem::exists(*args.data_dir)) {
                 Log::Error("No build dir specified (-d) and default 17559 doesnt exist.");
                 return 1;
             }
