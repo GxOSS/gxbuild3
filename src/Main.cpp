@@ -6,6 +6,7 @@
 #include "bootloaders/2bl.hpp"
 #include "bootloaders/Keyvault.hpp"
 #include "bootloaders/Xboxupd.hpp"
+#include "bootloaders/SMC.hpp"
 #include "patchers/BinaryParser.hpp"
 #include "patchers/Patcher.hpp"
 #include "ini/IniParser.hpp"
@@ -206,14 +207,31 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         return 0;
     }
 
+    std::filesystem::path cwd = std::filesystem::current_path();
     if (args.mode == "build") {
         if (!args.data_dir) {
-            Log::Error("Build mode requires -d,--build argument");
-            return 1;
+            args.data_dir = cwd / "17559";
+            if (!std::filesystem::exists(args.data_dir)) {
+                Log::Error("No build dir specified (-d) and default 17559 doesnt exist.");
+                return 1;
+            }
         }
-        if (!args.build_type) {
-            Log::Error("Build mode requires -t,--type argument");
-            return 1;
+        if (!args.common_dir) {
+            args.common_dir = cwd / "common";
+        }
+        if (!args.fw_dir) {
+            args.fw_dir = cwd / "mydata";
+        }
+        if (build_type_str.empty()) {
+            Log::Warn("No build type specified (-t), defaulting to 'retail'.");
+            build_type_str = "retail";
+        }
+        if (console_str.empty()) {
+            Log::Warn("No console type specified (-c), defaulting to 'jasper'.");
+            console_str = "jasper";
+        }
+        if (!args.output_dir) {
+            args.output_dir = cwd;
         }
     }
 
@@ -821,19 +839,101 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             new_nand.keyvault = donor_nand->keyvault;
             new_nand.smc = donor_nand->smc;
         }
+        if (auto smc_file = load_from_root(fw_dir, "smc.bin")) {
+            new_nand.smc = std::move(smc_file->second);
+            Log::Info("Loaded SMC from '{}'", smc_file->first.string());
+        }
 
         if (!new_nand.smc) {
-            if (auto smc_file = load_from_root(fw_dir, "smc.bin")) {
-                new_nand.smc = std::move(smc_file->second);
-                Log::Info("Loaded SMC from '{}'", smc_file->first.string());
+            Log::Error("No SMC found");
+            return 1;
+        }
+
+        {
+            auto& smc = *new_nand.smc;
+
+            // Decrypt if encrypted
+            if (smc_is_encrypted(smc)) {
+                Log::Info("SMC is encrypted, decrypting...");
+                smc = smc_decrypt(smc);
+            } else {
+                Log::Info("SMC is already decrypted");
+            }
+
+            if (!opts.smcnocheck.value_or(false)) {
+                static const std::map<uint8_t, std::string_view> kSmcConsoleNibble = {
+                    {1, "Xenon"}, {2, "Zephyr"}, {3, "Falcon/Opus"},
+                    {4, "Jasper"}, {5, "Trinity"}, {6, "Corona"},
+                };
+                static const std::map<ConsoleType, uint8_t> kExpectedNibble = {
+                    {ConsoleType::Xenon, 1},
+                    {ConsoleType::Zephyr, 2},
+                    {ConsoleType::Falcon, 3},
+                    {ConsoleType::Jasper, 4},   {ConsoleType::Jasper256, 4},
+                    {ConsoleType::Jasper512, 4}, {ConsoleType::JasperBB, 4},
+                    {ConsoleType::JasperBigFFS, 4},
+                    {ConsoleType::Trinity, 5},   {ConsoleType::TrinityBB, 5},
+                    {ConsoleType::TrinityBigFFS, 5},
+                    {ConsoleType::Corona, 6},    {ConsoleType::Corona4G, 6},
+                    {ConsoleType::Winchester, 6}, {ConsoleType::Winchester4G, 6},
+                };
+
+                const uint8_t smc_nibble = (smc[0x100] >> 4) & 0xF;
+                const auto nibble_it = kSmcConsoleNibble.find(smc_nibble);
+                const std::string_view smc_console =
+                    nibble_it != kSmcConsoleNibble.end() ? nibble_it->second : "Unknown";
+                Log::Info("SMC console type: {} (nibble={})", smc_console, smc_nibble);
+
+                if (args.console) {
+                    const auto exp_it = kExpectedNibble.find(*args.console);
+                    if (exp_it != kExpectedNibble.end() && exp_it->second != smc_nibble) {
+                        Log::Warn("SMC console type '{}' does not match expected console '{}' "
+                                  "-- pass smcnocheck=1 to suppress",
+                                  smc_console, console_name);
+                    }
+                }
+
+                // Check SMC patch type vs build type
+                const SmcType smc_type = smc_get_type(smc);
+                Log::Info("SMC patch type: {}", smc_type_name(smc_type));
+
+                const bool build_is_retail = args.build_type && *args.build_type == BuildType::Retail;
+                const bool build_is_jtag   = args.build_type && *args.build_type == BuildType::Jtag;
+                const bool build_is_glitch = args.build_type &&
+                    (*args.build_type == BuildType::Glitch  ||
+                     *args.build_type == BuildType::Glitch2 ||
+                     *args.build_type == BuildType::Glitch2m ||
+                     *args.build_type == BuildType::Glitch3);
+
+                const bool smc_is_retail = smc_type == SmcType::Retail;
+                const bool smc_is_jtag   = smc_type == SmcType::Jtag || smc_type == SmcType::RJtag ||
+                                           smc_type == SmcType::Cygnos || smc_type == SmcType::RJtagCygnos;
+                const bool smc_is_glitch = smc_type == SmcType::Glitch || smc_type == SmcType::RJtag ||
+                                           smc_type == SmcType::RJtagCygnos;
+
+                if (build_is_retail && !smc_is_retail) {
+                    Log::Warn("Build type is retail but SMC appears to be '{}' "
+                              "-- pass smcnocheck=true to suppress", smc_type_name(smc_type));
+                } else if (build_is_jtag && !smc_is_jtag) {
+                    Log::Warn("Build type is JTAG but SMC appears to be '{}' "
+                              "-- pass smcnocheck=true to suppress", smc_type_name(smc_type));
+                } else if (build_is_glitch && !smc_is_glitch) {
+                    Log::Warn("Build type is Glitch but SMC appears to be '{}' "
+                              "-- pass smcnocheck=true to suppress", smc_type_name(smc_type));
+                }
+            } else {
+                Log::Warn("SMC checks skipped (smcnocheck)");
             }
         }
 
+        if (auto kv_file = load_from_root(fw_dir, "kv.bin")) {
+            new_nand.keyvault = std::move(kv_file->second);
+            Log::Info("Loaded keyvault from '{}'", kv_file->first.string());
+        }
+
         if (!new_nand.keyvault) {
-            if (auto kv_file = load_from_root(fw_dir, "kv.bin")) {
-                new_nand.keyvault = std::move(kv_file->second);
-                Log::Info("Loaded keyvault from '{}'", kv_file->first.string());
-            }
+            Log::Error("No keyvault found");
+            return 1;
         }
 
         if (is_xell_build_type) {

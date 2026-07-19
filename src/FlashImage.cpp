@@ -913,9 +913,17 @@ bool write_build_bootloaders(flash_image_t& image, BuildType build_type) {
 
     log_build_layout(*layout, build_type);
 
-    if (!write_optional_blob(image.driver, image.smc, layout->smc_offset, "SMC")) {
+    // SMC must be written encrypted. Encrypt a temporary copy so we don't
+    // mutate the in-memory flash_image_t (callers may still inspect it).
+    std::optional<std::vector<uint8_t>> encrypted_smc;
+    if (image.smc) {
+        encrypted_smc = smc_encrypt(*image.smc);
+        Log::Info("build: SMC re-encrypted for output ({} bytes)", encrypted_smc->size());
+    }
+    if (!write_optional_blob(image.driver, encrypted_smc, layout->smc_offset, "SMC")) {
         return false;
     }
+
 
     if (!write_optional_blob(image.driver, image.keyvault, layout->kv_offset, "Keyvault")) {
         return false;
