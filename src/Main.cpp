@@ -909,7 +909,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 const bool smc_is_jtag   = smc_type == SmcType::Jtag || smc_type == SmcType::RJtag ||
                                            smc_type == SmcType::Cygnos || smc_type == SmcType::RJtagCygnos;
                 const bool smc_is_glitch = smc_type == SmcType::Glitch || smc_type == SmcType::RJtag ||
-                                           smc_type == SmcType::RJtagCygnos;
+                                           smc_type == SmcType::RJtagCygnos || smc_type == SmcType::CR4 ||
+                                           smc_type == SmcType::SmcPlus || smc_type == SmcType::Rgh3V1 ||
+                                           smc_type == SmcType::Rgh3V2 || smc_type == SmcType::Rgh13;
 
                 if (build_is_retail && !smc_is_retail) {
                     Log::Warn("Build type is retail but SMC appears to be '{}' "

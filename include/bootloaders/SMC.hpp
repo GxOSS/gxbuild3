@@ -12,6 +12,11 @@ enum class SmcType {
     Cygnos     = 3,
     RJtag      = 4,   // Glitch + JTAG
     RJtagCygnos = 5,  // Glitch + JTAG + Cygnos
+    CR4        = 6,
+    SmcPlus    = 7,
+    Rgh3V1     = 8,
+    Rgh3V2     = 9,
+    Rgh13      = 10,
 };
 
 std::string_view smc_type_name(SmcType type);
