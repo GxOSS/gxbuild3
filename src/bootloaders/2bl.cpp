@@ -177,8 +177,18 @@ void BootloaderCb::populate_metadata() {
 }
 
 std::vector<uint8_t> BootloaderCb::serialize() const {
-    std::vector<uint8_t> out(sizeof(bl_header));
-    std::memcpy(out.data(), &header, sizeof(bl_header));
+    std::vector<uint8_t> out(sizeof(bl2_header));
+
+    bl2_header temp_hdr = header;
+
+    temp_hdr.header.magic = bswap16(temp_hdr.header.magic);
+    temp_hdr.header.version = bswap16(temp_hdr.header.version);
+    temp_hdr.header.flags = bswap16(temp_hdr.header.flags);
+    temp_hdr.header.size = bswap32(temp_hdr.header.size);
+    temp_hdr.header.entrypoint = bswap32(temp_hdr.header.entrypoint);
+
+    std::memcpy(out.data(), &temp_hdr, sizeof(bl2_header));
     out.insert(out.end(), data.begin(), data.end());
+
     return out;
 }
