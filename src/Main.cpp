@@ -99,39 +99,8 @@ int main(int argc, char** argv) {
 
     CLI::App app{"GxBuild3"};
     app.set_help_flag("-?,--help", "Print this help message and exit");
-
-    std::string build_type_str;
-    std::string console_str;
-
-    app.add_option("-t,--type", build_type_str)
-        ->description("Build type (retail, jtag, glitch, glitch2, glitch2m, glitch3, devkit)");
-    app.add_option("-c,--console", console_str)->description("Console revision");
-
-    app.add_option("-p,--cpukey", args.cpu_key)->description("CPU key (hex)");
-    app.add_option("-b,--1blkey", args.bl_key)->description("1BL key (hex)");
-    app.add_option("-d,--build", args.data_dir)->description("Build data directory");
-    app.add_option("-m,--common", args.common_dir)->description("Common files directory");
-    app.add_option("-f,--data", args.fw_dir)->description("Firmware directory");
-    app.add_option("-s,--sha", args.sha_file)->description("SHA file path");
-    app.add_option("-a,--addon", args.addons)->description("Addon packages");
-    app.add_option("-i,--fwext", args.ini_ext)->description("Firmware extension override");
-    app.add_option("-r,--iniext", args.bl_ext)->description("INI extension override");
-    app.add_option("-8,--raw", args.raw_patches)->description("Raw patch entries");
-    app.add_option("-l,--image", args.source_nand)->description("Source NAND image");
-    app.add_option("--ecc", args.ecc)->description("ECC file");
-    app.add_option("-u,--update", args.xboxupd)->description("xboxupd.bin path");
-    app.add_option("-e,--preset", args.preset)->description("Preset name");
-    app.add_option("-n,--cmd", args.cmd)->description("Command override");
-    app.add_option("--format", args.format)->description("Output format");
-    app.add_option("-g,--output-dir", args.output_dir)->description("Output directory");
-    app.add_option("output", args.output)->description("Output file");
-
-    app.add_flag("-x,--xsb", args.xsb)->description("Enable XSB mode");
-    app.add_flag("--fullimage", args.full_image)->description("Build full image");
-    app.add_flag("--bigblock", args.bigblock)->description("Use big block layout");
     app.add_flag("-v,--verbose", args.verbose)->description("Enable verbose trace logging");
     app.add_flag("--license", args.license)->description("Show license information");
-
     app.add_option("-o,--options", "Semicolon-separated key=value option overrides")
         ->each([&args](const std::string& val) {
             std::stringstream ss(val);
@@ -146,9 +115,47 @@ int main(int argc, char** argv) {
             }
         });
 
+    std::string build_type_str;
+    std::string console_str;
+
     auto* build_sub = app.add_subcommand("build", "Build a NAND image (default)");
     auto* extract_sub = app.add_subcommand("extract", "Extract files from a NAND image");
     auto* stfs_sub = app.add_subcommand("stfs", "Extract files from a PIRS/STFS package");
+
+    // global keys
+    app.add_option("-p,--cpukey", args.cpu_key)->description("CPU key (hex)");
+    app.add_option("-b,--1blkey", args.bl_key)->description("1BL key (hex)");
+
+    // ini info
+    build_sub->add_option("-e,--preset", args.preset)->description("Preset name");
+    build_sub->add_option("-t,--type", build_type_str)->required()
+        ->description("Build type (retail, jtag, glitch, glitch2, glitch2m, glitch3, devkit)");
+    build_sub->add_option("-c,--console", console_str)->description("Console revision")->required();
+    build_sub->add_option("-i,--fwext", args.ini_ext)->description("Firmware extension override");
+    build_sub->add_option("-r,--iniext", args.bl_ext)->description("INI extension override");
+
+    // build dirs
+    build_sub->add_option("-d,--build", args.data_dir)->description("Build data directory");
+    build_sub->add_option("-m,--common", args.common_dir)->description("Common files directory");
+    build_sub->add_option("-f,--data", args.fw_dir)->description("Firmware directory");
+
+    // build options
+    build_sub->add_flag("-x,--xsb", args.xsb)->description("Enable XSB mode");
+    build_sub->add_flag("--fullimage", args.full_image)->description("Build full image");
+    build_sub->add_flag("--bigblock", args.bigblock)->description("Use big block layout");
+
+    // input data
+    build_sub->add_option("-8,--raw", args.raw_patches)->description("Raw patch entries");
+    build_sub->add_option("-u,--update", args.xboxupd)->description("xboxupd.bin path");
+    build_sub->add_option("-a,--addon", args.addons)->description("Addon packages");
+    app.add_option("-l,--image", args.source_nand)->description("Source NAND image");
+    app.add_option("--ecc", args.ecc)->description("ECC file");
+    app.add_option("-s,--sha", args.sha_file)->description("SHA file path");
+
+    // output options
+    build_sub->add_option("output", args.output)->description("Output file");
+    app.add_option("--format", args.format)->description("Output format");
+    app.add_option("-g,--output-dir", args.output_dir)->description("Output directory");
 
     build_sub->callback([&args]() { args.mode = "build"; });
     extract_sub->callback([&args]() { args.mode = "extract"; });
@@ -197,6 +204,22 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                   << std::endl;
         return 0;
+    }
+
+    if (args.mode == "build") {
+        if (!args.data_dir) {
+            Log::Error("Build mode requires -d,--build argument");
+            return 1;
+        }
+        if (!args.build_type) {
+            Log::Error("Build mode requires -t,--type argument");
+            return 1;
+        }
+    }
+
+    if (args.mode == "extract" && !args.source_nand) {
+        Log::Error("Extract mode requires -l,--image argument");
+        return 1;
     }
 
     std::cout << Ascii::Logo;
