@@ -232,8 +232,7 @@ raw_nand_header_t create_synthetic_header(const flash_image_t& image,
     header.version = bswap16(static_cast<uint16_t>(resolve_synthetic_header_version(image)));
     header.entrypoint = bswap32(kSyntheticBootloaderChainOffset);
     header.size = bswap32(target.patchslot_base);
-    header.kv_size = bswap32(static_cast<uint32_t>(image.keyvault ? image.keyvault->size()
-                                                                  : kSyntheticKvSize));
+    header.kv_size = bswap32(kSyntheticKvSize);
     header.cf1_offset = bswap32(target.patchslot_base);
     header.patch_slots = bswap16(target.patch_slots);
     header.kv_offset = bswap32(kSyntheticKvOffset);
@@ -925,8 +924,14 @@ bool write_build_bootloaders(flash_image_t& image, BuildType build_type) {
     }
 
 
-    if (!write_optional_blob(image.driver, image.keyvault, layout->kv_offset, "Keyvault")) {
-        return false;
+    if (image.keyvault) {
+        std::vector<uint8_t> kv_to_write = *image.keyvault;
+        if (kv_to_write.size() > 0x4000) {
+            kv_to_write.resize(0x4000);
+        }
+        if (!write_optional_blob(image.driver, kv_to_write, layout->kv_offset, "Keyvault")) {
+            return false;
+        }
     }
 
     if (layout->bootloader_chain_offset) {
@@ -1133,10 +1138,22 @@ nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
     
     // Parse NAND header metadata with proper endian swapping
     results.kv_offset = bswap32(header->kv_offset);
+    if (results.kv_offset == 0 || results.kv_offset == 0xFFFFFFFF) {
+        results.kv_offset = 0x4000;
+    }
     results.kv_size = bswap32(header->kv_size);
+    if (results.kv_size == 0 || results.kv_size == 0xFFFFFFFF || results.kv_size > 0x4000) {
+        results.kv_size = 0x4000;
+    }
     results.kv_version = bswap16(header->kv_version);
     results.smc_size = bswap32(header->smc_size);
+    if (results.smc_size == 0 || results.smc_size == 0xFFFFFFFF) {
+        results.smc_size = 0x3000;
+    }
     results.smc_offset = bswap32(header->smc_offset);
+    if (results.smc_offset == 0 || results.smc_offset == 0xFFFFFFFF) {
+        results.smc_offset = 0x1000;
+    }
     results.smc_config_offset = bswap32(header->smc_config_offset);
     results.fs_offset = bswap32(header->fs_offset);
     results.payload_indicator = bswap32(header->payload_indicator);
@@ -1306,21 +1323,45 @@ FlashImage FlashImage::parse(std::vector<uint8_t> data) {
 
     image.nand_results = read(image.driver);
 
-    if (image.nand_results && image.nand_results->mobile_results) {
-        image.mobile_data =
-            load_mobile_data_from_results(image.driver, *image.nand_results->mobile_results);
-    }
+    if (image.nand_results && image.nand_results->valid) {
+        if (image.nand_results->kv_offset != 0 && image.nand_results->kv_offset != 0xFFFFFFFF &&
+            image.nand_results->kv_size != 0) {
+            uint32_t read_kv_size = std::min<uint32_t>(image.nand_results->kv_size, 0x4000);
+            image.keyvault = image.driver.read(image.nand_results->kv_offset, read_kv_size);
+            if (image.keyvault) {
+                if (image.keyvault->size() > 0x4000) {
+                    image.keyvault->resize(0x4000);
+                }
+                Log::Info("Parsed Keyvault from image at 0x{:x} (0x{:x} bytes)",
+                          image.nand_results->kv_offset, image.keyvault->size());
+            }
+        }
 
-    if (image.nand_results && image.nand_results->fs_block_idx) {
-        auto fs_driver = std::make_shared<gxbuild3::utils::FlashBlockDriver>(image.driver);
-        gxbuild3::bootloaders::FlashFileSystem filesystem(fs_driver);
-        if (filesystem.load(*image.nand_results->fs_block_idx)) {
-            image.flashfs_files = flashfs_files_t{};
-            load_known_flashfs_files(filesystem, *image.flashfs_files);
-            image.filesystem = std::move(filesystem);
-        } else {
-            Log::Warn("FlashImage::parse: Failed to load FlashFS at block 0x{:x}",
-                      *image.nand_results->fs_block_idx);
+        if (image.nand_results->smc_offset != 0 && image.nand_results->smc_offset != 0xFFFFFFFF &&
+            image.nand_results->smc_size != 0) {
+            image.smc = image.driver.read(image.nand_results->smc_offset, image.nand_results->smc_size);
+            if (image.smc) {
+                Log::Info("Parsed SMC from image at 0x{:x} (0x{:x} bytes)",
+                          image.nand_results->smc_offset, image.smc->size());
+            }
+        }
+
+        if (image.nand_results->mobile_results) {
+            image.mobile_data =
+                load_mobile_data_from_results(image.driver, *image.nand_results->mobile_results);
+        }
+
+        if (image.nand_results->fs_block_idx) {
+            auto fs_driver = std::make_shared<gxbuild3::utils::FlashBlockDriver>(image.driver);
+            gxbuild3::bootloaders::FlashFileSystem filesystem(fs_driver);
+            if (filesystem.load(*image.nand_results->fs_block_idx)) {
+                image.flashfs_files = flashfs_files_t{};
+                load_known_flashfs_files(filesystem, *image.flashfs_files);
+                image.filesystem = std::move(filesystem);
+            } else {
+                Log::Warn("FlashImage::parse: Failed to load FlashFS at block 0x{:x}",
+                          *image.nand_results->fs_block_idx);
+            }
         }
     }
 

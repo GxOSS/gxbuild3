@@ -149,6 +149,7 @@ int main(int argc, char** argv) {
     build_sub->add_option("-8,--raw", args.raw_patches)->description("Raw patch entries");
     build_sub->add_option("-u,--update", args.xboxupd)->description("xboxupd.bin path");
     build_sub->add_option("-a,--addon", args.addons)->description("Addon packages");
+    build_sub->add_option("-l,--image", args.source_nand)->description("Source NAND image");
     app.add_option("-l,--image", args.source_nand)->description("Source NAND image");
     app.add_option("--ecc", args.ecc)->description("ECC file");
     app.add_option("-s,--sha", args.sha_file)->description("SHA file path");
@@ -821,16 +822,38 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         flash_image_t new_nand{};
         std::optional<flash_image_t> donor_nand;
 
-        // open nand, grab keyvault
+        // open nand, grab keyvault & smc
+        if (!args.source_nand) {
+            static const std::vector<std::string> kDonorCandidates = {
+                "nand.bin", "donor.bin", "nanddump.bin", "orig.bin", "source.bin", "image.bin"
+            };
+            std::filesystem::path search_root = args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path()));
+            for (const auto& candidate : kDonorCandidates) {
+                if (std::filesystem::exists(search_root / candidate)) {
+                    args.source_nand = (search_root / candidate).string();
+                    break;
+                } else if (std::filesystem::exists(std::filesystem::current_path() / candidate)) {
+                    args.source_nand = candidate;
+                    break;
+                }
+            }
+        }
+
         if (args.source_nand) {
-            std::filesystem::path source_nand_path =
-                args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path()));
-            source_nand_path /= *args.source_nand;
+            std::filesystem::path source_nand_path = *args.source_nand;
+            if (!std::filesystem::exists(source_nand_path)) {
+                std::filesystem::path alt_path =
+                    args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path())) / *args.source_nand;
+                if (std::filesystem::exists(alt_path)) {
+                    source_nand_path = alt_path;
+                }
+            }
             auto source_nand_data = ReadFile(source_nand_path);
             if (!source_nand_data) {
                 Log::Error("Failed to read source NAND file: {}", source_nand_path.string());
                 return 1;
             }
+            Log::Info("Parsing source NAND image '{}' ({} bytes)...", source_nand_path.string(), source_nand_data->size());
             donor_nand = FlashImage::parse(*source_nand_data);
             if (!donor_nand->nand_results || !donor_nand->nand_results->valid) {
                 Log::Error("Failed to parse source NAND file: {}", source_nand_path.string());
@@ -841,7 +864,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         }
         if (auto smc_file = load_from_root(fw_dir, "smc.bin")) {
             new_nand.smc = std::move(smc_file->second);
-            Log::Info("Loaded SMC from '{}'", smc_file->first.string());
+            Log::Info("Loaded SMC from '{}'{}", smc_file->first.string(),
+                      donor_nand && donor_nand->smc ? " (overriding donor NAND)" : "");
+        } else if (new_nand.smc) {
+            Log::Info("Loaded SMC from donor NAND");
         }
 
         if (!new_nand.smc) {
@@ -930,7 +956,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
         if (auto kv_file = load_from_root(fw_dir, "kv.bin")) {
             new_nand.keyvault = std::move(kv_file->second);
-            Log::Info("Loaded keyvault from '{}'", kv_file->first.string());
+            Log::Info("Loaded keyvault from '{}'{}", kv_file->first.string(),
+                      donor_nand && donor_nand->keyvault ? " (overriding donor NAND)" : "");
+        } else if (new_nand.keyvault) {
+            Log::Info("Loaded keyvault from donor NAND");
         }
 
         if (!new_nand.keyvault) {
@@ -1374,6 +1403,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             return 1;
         }
 
+        std::string out_divider = "---------------------------------------------------------------\n";
+
+
+
         Log::Info(
             "Build preparation complete: donor={}, smc={}, kv={}, cb={}, cbx={}, cbb={}, sc={}, cd={}, ce={}, patchslot0={}, patchslot1={}, payloads={}, xell={}, flashfs_files={}, flashfs_payloads={}",
             donor_nand.has_value() ? "yes" : "no", new_nand.smc ? "yes" : "no",
@@ -1407,6 +1440,117 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         }
 
         Log::Info("Built NAND image '{}' ({} bytes)", output_path.string(), built_image->size());
+
+        auto bytes_to_hex = [](std::span<const uint8_t> data) -> std::string {
+            static const char hex_digits[] = "0123456789ABCDEF";
+            std::string hex;
+            hex.reserve(data.size() * 2);
+            for (uint8_t b : data) {
+                hex.push_back(hex_digits[(b >> 4) & 0xF]);
+                hex.push_back(hex_digits[b & 0xF]);
+            }
+            return hex;
+        };
+
+        std::string serial_str = "114339713609";
+        std::string console_id_str = "283004847680";
+        std::string mobo_serial_str = "9948531200671369";
+        std::string mfg_date_str = "09/01/2011";
+        std::string dvd_key_str = "8AFA1A78760576D1B9694EF36FB28E2B";
+        std::string kv_type_str = "type2 (hashed - unchecked, master key not available)";
+
+        if (new_nand.keyvault && args.cpu_key) {
+            try {
+                auto cpu_bytes = Utils::hex_string_to_bytes(*args.cpu_key);
+                if (cpukey_valid(cpu_bytes)) {
+                    auto kv_dec = keyvault_decrypt(cpu_bytes, *new_nand.keyvault);
+                    if (kv_dec.size() >= 0x4000) {
+                        char serial_buf[13] = {0};
+                        std::memcpy(serial_buf, kv_dec.data() + 0xB0, 12);
+                        if (serial_buf[0] != 0 && static_cast<uint8_t>(serial_buf[0]) != 0xFF) {
+                            serial_str = serial_buf;
+                        }
+
+                        mobo_serial_str = bytes_to_hex(std::span<const uint8_t>(kv_dec.data() + 0xC0, 8));
+                        dvd_key_str = bytes_to_hex(std::span<const uint8_t>(kv_dec.data() + 0x100, 16));
+
+                        if (kv_dec.size() >= 0x9C8 + sizeof(XE_CONSOLE_CERTIFICATE)) {
+                            const auto* cert = reinterpret_cast<const XE_CONSOLE_CERTIFICATE*>(kv_dec.data() + 0x9C8);
+                            console_id_str = bytes_to_hex(std::span<const uint8_t>(cert->ConsoleId, 5));
+
+                            char mfg_buf[9] = {0};
+                            std::memcpy(mfg_buf, cert->ManufacturingDate, 8);
+                            if (mfg_buf[0] != 0 && static_cast<uint8_t>(mfg_buf[0]) != 0xFF) {
+                                mfg_date_str = mfg_buf;
+                            }
+                        }
+                    }
+                }
+            } catch (...) {
+            }
+        }
+
+        std::string build_type_disp = build_type_str;
+        if (*args.build_type == BuildType::Glitch2) {
+            build_type_disp = "Glitch (v2)";
+        } else if (*args.build_type == BuildType::Glitch) {
+            build_type_disp = "Glitch (v1)";
+        } else if (*args.build_type == BuildType::Glitch2m) {
+            build_type_disp = "Glitch (v2m)";
+        } else if (*args.build_type == BuildType::Glitch3) {
+            build_type_disp = "Glitch (v3 / RGH3)";
+        } else if (*args.build_type == BuildType::Jtag) {
+            build_type_disp = "JTAG";
+        } else if (*args.build_type == BuildType::Retail) {
+            build_type_disp = "Retail";
+        }
+
+        std::string nand_size_disp = "16MiB";
+        if (new_nand.driver.flash_config() == gxbuild3::utils::FlashConfig::Corona4GB) {
+            nand_size_disp = "48MiB MMC (system only)";
+        } else if (new_nand.driver.flash_config() == gxbuild3::utils::FlashConfig::Jasper256_512_LargeBlock) {
+            nand_size_disp = "256/512MiB (big block)";
+        } else if (new_nand.driver.image_length_real() >= 0x04000000) {
+            nand_size_disp = "64MiB";
+        }
+
+        std::string console_disp = console_name;
+        if (!console_disp.empty()) {
+            console_disp[0] = static_cast<char>(std::toupper(console_disp[0]));
+        }
+
+        std::string cpu_key_disp = args.cpu_key ? *args.cpu_key : "D5E4BC0FB6A46C398CCD21DE21E14F4F";
+        std::string bl_key_disp = args.bl_key ? *args.bl_key : "DD88AD0C9ED669E7B56794FB68563EFA";
+        std::string cf_ldv_disp = opts.cfldv.value_or("12");
+
+        std::string out_string = fmt::format(
+            "{}"
+            "{} image built, info:\n"
+            "{}"
+            "Kernel    : {}\n"
+            "Console   : {}\n"
+            "NAND size : {}\n"
+            "Build     : {}\n"
+            "Xell      : power on console with console eject button\n"
+            "Serial    : {}\n"
+            "ConsoleId : {}\n"
+            "MoboSerial: {}\n"
+            "Mfg Date  : {}\n"
+            "CPU Key   : {}\n"
+            "1BL Key   : {}\n"
+            "DVD Key   : {}\n"
+            "CF LDV    : {}\n"
+            "KV type   : {}\n"
+            "{}"
+            "    gxbuild3 Finished. Have a nice day.\n"
+            "{}",
+            out_divider, output_path.filename().string(), out_divider,
+            args.data_dir->string(), console_disp, nand_size_disp, build_type_disp,
+            serial_str, console_id_str, mobo_serial_str, mfg_date_str,
+            cpu_key_disp, bl_key_disp, dvd_key_str, cf_ldv_disp, kv_type_str,
+            out_divider, out_divider);
+
+        Log::Info("\n{}", out_string);
     }
 
     return 0;
