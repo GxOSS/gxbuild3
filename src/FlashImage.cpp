@@ -192,13 +192,10 @@ std::optional<SyntheticNandTarget> resolve_synthetic_target(std::optional<Consol
 }
 
 uint32_t resolve_synthetic_fs_offset(const gxbuild3::utils::FlashBlockDriver& driver) {
-    if (driver.reserve_block_idx() < kSyntheticFsRootBlockDistanceFromReserve) {
-        return driver.fs_offset();
+    if (driver.flash_config() == gxbuild3::utils::FlashConfig::Jasper256_512_LargeBlock) {
+        return 0xC0000U;
     }
-
-    const uint32_t root_block_idx =
-        driver.reserve_block_idx() - kSyntheticFsRootBlockDistanceFromReserve;
-    return root_block_idx * driver.lil_block_length();
+    return 0x10000U;
 }
 
 uint32_t resolve_synthetic_header_version(const flash_image_t& image) {
@@ -237,7 +234,29 @@ raw_nand_header_t create_synthetic_header(const flash_image_t& image,
     header.patch_slots = bswap16(target.patch_slots);
     header.kv_offset = bswap32(kSyntheticKvOffset);
     header.fs_offset = bswap32(resolve_synthetic_fs_offset(driver));
-    header.smc_config_offset = bswap32(resolve_synthetic_smc_config_offset(driver));
+    header.kv_version = image.header.kv_version;
+    if (header.kv_version == 0 && image.nand_results) {
+        header.kv_version = bswap16(image.nand_results->kv_version);
+    }
+    if (header.kv_version == 0) {
+        header.kv_version = bswap16(0x0712);
+    }
+
+    static const uint8_t kCopyrightStr[] = {
+        0xA9, ' ', '2', '0', '0', '4', '-', '2', '0', '1', '0', ' ',
+        'M', 'i', 'c', 'r', 'o', 's', 'o', 'f', 't', ' ',
+        'C', 'o', 'r', 'p', 'o', 'r', 'a', 't', 'i', 'o', 'n', '.', ' ',
+        'A', 'l', 'l', ' ', 'r', 'i', 'g', 'h', 't', 's', ' ',
+        'r', 'e', 's', 'e', 'r', 'v', 'e', 'd', '.',
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x12
+    };
+    std::memcpy(header.reserved_0x10, kCopyrightStr, std::min(sizeof(header.reserved_0x10), sizeof(kCopyrightStr)));
+
+    if (image.nand_results && image.nand_results->smc_config_offset == 0) {
+        header.smc_config_offset = 0;
+    } else {
+        header.smc_config_offset = bswap32(resolve_synthetic_smc_config_offset(driver));
+    }
     header.smc_size = bswap32(static_cast<uint32_t>(image.smc ? image.smc->size() : kSyntheticSmcSize));
     header.smc_offset = bswap32(kSyntheticSmcOffset);
     return header;
@@ -614,6 +633,35 @@ std::optional<mobile_data_t> load_mobile_data_from_results(
     return data;
 }
 
+uint16_t calculate_mobile_blocks_count(const mobile_results_t& mobile, uint32_t pages_per_block) {
+    if (pages_per_block == 0) return 0;
+    uint32_t max_page = 0;
+    uint32_t min_page = UINT32_MAX;
+    bool found = false;
+
+    auto check_slot = [&](const std::optional<mobile_result_t>& res) {
+        if (res) {
+            min_page = std::min(min_page, res->start_page);
+            max_page = std::max(max_page, res->start_page + res->page_count);
+            found = true;
+        }
+    };
+
+    check_slot(mobile.x31);
+    check_slot(mobile.x32);
+    check_slot(mobile.x33);
+    check_slot(mobile.x34);
+    check_slot(mobile.x35);
+    check_slot(mobile.x36);
+    check_slot(mobile.x37);
+    check_slot(mobile.x38);
+    check_slot(mobile.x39);
+
+    if (!found) return 0;
+    uint32_t total_pages = max_page - min_page;
+    return static_cast<uint16_t>(ceil_div_u32(total_pages, pages_per_block));
+}
+
 void load_known_flashfs_files(const gxbuild3::bootloaders::FlashFileSystem& filesystem,
                               flashfs_files_t& files) {
     struct FlashFsFileBinding {
@@ -674,29 +722,20 @@ flashfs_payload_map_t collect_build_flashfs_payloads(const flash_image_t& image)
     return payloads;
 }
 
-std::optional<uint16_t> resolve_build_fs_block_idx(const flash_image_t& image,
-                                                   const gxbuild3::utils::FlashBlockDriver& driver) {
-    if (image.nand_results && image.nand_results->fs_block_idx) {
-        return image.nand_results->fs_block_idx;
+uint32_t resolve_build_sys_update_addr(const flash_image_t& image) {
+    if (image.nand_results && image.nand_results->cf0) {
+        return image.nand_results->cf0->offset;
     }
-    if (image.nand_results) {
-        return fs_offset_to_block_idx(driver, image.nand_results->fs_offset);
-    }
-    return fs_offset_to_block_idx(driver, bswap32(image.header.fs_offset));
+    return bswap32(image.header.cf1_offset);
 }
+
+
 
 uint32_t resolve_build_fs_version(const flash_image_t& image) {
     if (image.filesystem) {
         return image.filesystem->version();
     }
     return 1;
-}
-
-uint32_t resolve_build_sys_update_addr(const flash_image_t& image) {
-    if (image.nand_results && image.nand_results->cf0) {
-        return image.nand_results->cf0->offset;
-    }
-    return bswap32(image.header.cf1_offset);
 }
 
 } // namespace
@@ -903,7 +942,7 @@ bool write_patchslot_chain(flash_image_t& image, const patchslot_t& patchslot, u
     return true;
 }
 
-bool write_build_bootloaders(flash_image_t& image, BuildType build_type) {
+bool write_build_bootloaders(flash_image_t& image, BuildType build_type, uint32_t& cursor_out) {
     const auto layout = resolve_build_layout(image, build_type);
     if (!layout) {
         Log::Warn("build: no layout available, skipping bootloader serialization");
@@ -912,8 +951,6 @@ bool write_build_bootloaders(flash_image_t& image, BuildType build_type) {
 
     log_build_layout(*layout, build_type);
 
-    // SMC must be written encrypted. Encrypt a temporary copy so we don't
-    // mutate the in-memory flash_image_t (callers may still inspect it).
     std::optional<std::vector<uint8_t>> encrypted_smc;
     if (image.smc) {
         encrypted_smc = smc_encrypt(*image.smc);
@@ -922,7 +959,6 @@ bool write_build_bootloaders(flash_image_t& image, BuildType build_type) {
     if (!write_optional_blob(image.driver, encrypted_smc, layout->smc_offset, "SMC")) {
         return false;
     }
-
 
     if (image.keyvault) {
         std::vector<uint8_t> kv_to_write = *image.keyvault;
@@ -934,8 +970,9 @@ bool write_build_bootloaders(flash_image_t& image, BuildType build_type) {
         }
     }
 
+    uint32_t cursor = 0x8000;
     if (layout->bootloader_chain_offset) {
-        uint32_t cursor = *layout->bootloader_chain_offset;
+        cursor = *layout->bootloader_chain_offset;
         Log::Info("build: serializing early bootloader chain from 0x{:x}", cursor);
         if (!write_bootloader_chain_entry(image.driver, image.cb_or_A, cursor, "CB")) {
             return false;
@@ -958,31 +995,47 @@ bool write_build_bootloaders(flash_image_t& image, BuildType build_type) {
     }
 
     if (image.patchslot_0) {
-        if (!layout->patchslot_base) {
-            Log::Error("build: patchslot 0 data staged but no patchslot base resolved");
-            return false;
+        const uint32_t lil_block_len = image.driver.lil_block_length();
+        uint32_t patchslot_base = (lil_block_len > 0) ? ceil_div_u32(cursor, lil_block_len) * lil_block_len : cursor;
+        if (layout->patchslot_base && *layout->patchslot_base > patchslot_base) {
+            patchslot_base = *layout->patchslot_base;
         }
-        if (!write_patchslot_chain(image, *image.patchslot_0, *layout->patchslot_base,
+
+        Log::Info("build: resolved dynamic patchslot 0 base 0x{:x}", patchslot_base);
+        if (!write_patchslot_chain(image, *image.patchslot_0, patchslot_base,
                                    "patchslot 0")) {
             return false;
         }
+
+        cursor = patchslot_base + (image.patchslot_0->cf ? static_cast<uint32_t>(image.patchslot_0->cf->size()) : 0U) +
+                 (image.patchslot_0->cg ? static_cast<uint32_t>(image.patchslot_0->cg->size()) : 0U);
+
+        // Update raw NAND header cf1_offset (sys_update_addr) & size
+        raw_nand_header_t header_update = image.header;
+        header_update.cf1_offset = bswap32(patchslot_base);
+        header_update.size = bswap32(patchslot_base);
+        image.header = header_update;
+        image.driver.write(0, reinterpret_cast<const uint8_t*>(&header_update), sizeof(raw_nand_header_t));
     }
 
     if (image.patchslot_1) {
-        if (!layout->patchslot_1_base) {
-            Log::Error("build: patchslot 1 data staged but no patchslot 1 base resolved");
-            return false;
+        uint32_t patchslot_1_base = align_up_0x10(cursor);
+        if (layout->patchslot_1_base && *layout->patchslot_1_base > patchslot_1_base) {
+            patchslot_1_base = *layout->patchslot_1_base;
         }
-        if (!write_patchslot_chain(image, *image.patchslot_1, *layout->patchslot_1_base,
+        if (!write_patchslot_chain(image, *image.patchslot_1, patchslot_1_base,
                                    "patchslot 1")) {
             return false;
         }
+        cursor = patchslot_1_base + (image.patchslot_1->cf ? static_cast<uint32_t>(image.patchslot_1->cf->size()) : 0U) +
+                 (image.patchslot_1->cg ? static_cast<uint32_t>(image.patchslot_1->cg->size()) : 0U);
     }
 
+    cursor_out = cursor;
     return true;
 }
 
-bool write_build_xell(flash_image_t& image, BuildType build_type) {
+bool write_build_xell(flash_image_t& image, BuildType build_type, uint32_t& cursor) {
     const auto layout = resolve_build_layout(image, build_type);
     if (!layout || !layout->xell_offset || !layout->xell_region_size) {
         return true;
@@ -992,11 +1045,21 @@ bool write_build_xell(flash_image_t& image, BuildType build_type) {
         return true;
     }
 
-    return write_build_region(image.driver, *layout->xell_offset, *layout->xell_region_size,
-                              *image.xellblock->xell_main, "XeLL");
+    uint32_t target_offset = align_up_0x10(cursor);
+    if (layout->xell_offset && *layout->xell_offset > target_offset) {
+        target_offset = *layout->xell_offset;
+    }
+
+    if (!write_build_region(image.driver, target_offset, *layout->xell_region_size,
+                            *image.xellblock->xell_main, "XeLL")) {
+        return false;
+    }
+
+    cursor = target_offset + static_cast<uint32_t>(image.xellblock->xell_main->size());
+    return true;
 }
 
-bool write_build_addon_patches(flash_image_t& image, BuildType build_type) {
+bool write_build_addon_patches(flash_image_t& image, BuildType build_type, uint32_t& cursor) {
     const auto layout = resolve_build_layout(image, build_type);
     if (!layout || !layout->patches_offset || !layout->patches_region_size) {
         return true;
@@ -1006,11 +1069,21 @@ bool write_build_addon_patches(flash_image_t& image, BuildType build_type) {
         return true;
     }
 
-    return write_build_region(image.driver, *layout->patches_offset, *layout->patches_region_size,
-                              *image.payloads->addon_patches, "patch blob");
+    uint32_t target_offset = align_up_0x10(cursor);
+    if (layout->patches_offset && *layout->patches_offset > target_offset) {
+        target_offset = *layout->patches_offset;
+    }
+
+    if (!write_build_region(image.driver, target_offset, *layout->patches_region_size,
+                            *image.payloads->addon_patches, "patch blob")) {
+        return false;
+    }
+
+    cursor = target_offset + static_cast<uint32_t>(image.payloads->addon_patches->size());
+    return true;
 }
 
-bool write_build_jtag_payloads(flash_image_t& image, BuildType build_type) {
+bool write_build_jtag_payloads(flash_image_t& image, BuildType build_type, uint32_t& cursor) {
     if (!is_jtag_build(build_type)) {
         return true;
     }
@@ -1021,25 +1094,40 @@ bool write_build_jtag_payloads(flash_image_t& image, BuildType build_type) {
     }
 
     if (layout->payload_offset && layout->payload_region_size && image.payloads->jtag_payload) {
-        if (!write_build_region(image.driver, *layout->payload_offset, *layout->payload_region_size,
+        uint32_t target_offset = align_up_0x10(cursor);
+        if (*layout->payload_offset > target_offset) {
+            target_offset = *layout->payload_offset;
+        }
+        if (!write_build_region(image.driver, target_offset, *layout->payload_region_size,
                                 *image.payloads->jtag_payload, "JTAG payload")) {
             return false;
         }
+        cursor = target_offset + static_cast<uint32_t>(image.payloads->jtag_payload->size());
     }
 
     if (layout->freeboot_offset && layout->freeboot_region_size && image.payloads->jtag_rebooter) {
-        if (!write_build_region(image.driver, *layout->freeboot_offset,
+        uint32_t target_offset = align_up_0x10(cursor);
+        if (*layout->freeboot_offset > target_offset) {
+            target_offset = *layout->freeboot_offset;
+        }
+        if (!write_build_region(image.driver, target_offset,
                                 *layout->freeboot_region_size,
                                 *image.payloads->jtag_rebooter, "JTAG rebooter")) {
             return false;
         }
+        cursor = target_offset + static_cast<uint32_t>(image.payloads->jtag_rebooter->size());
     }
 
     if (layout->fuses_offset && layout->fuses_region_size && image.payloads->vfuses) {
-        if (!write_build_region(image.driver, *layout->fuses_offset, *layout->fuses_region_size,
+        uint32_t target_offset = align_up_0x10(cursor);
+        if (*layout->fuses_offset > target_offset) {
+            target_offset = *layout->fuses_offset;
+        }
+        if (!write_build_region(image.driver, target_offset, *layout->fuses_region_size,
                                 *image.payloads->vfuses, "JTAG fuses")) {
             return false;
         }
+        cursor = target_offset + static_cast<uint32_t>(image.payloads->vfuses->size());
     }
 
     return true;
@@ -1159,17 +1247,30 @@ nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
     results.payload_indicator = bswap32(header->payload_indicator);
     results.patch_slots = bswap16(header->patch_slots);
 
+    results.mobile_results = detect_mobile_results_from_spare(driver);
+
+    uint16_t mobile_blocks = 0;
+    if (results.mobile_results && driver.block_length() != 0 && driver.page_length() != 0) {
+        const uint32_t pages_per_block = driver.block_length() / driver.page_length();
+        mobile_blocks = calculate_mobile_blocks_count(*results.mobile_results, pages_per_block);
+    }
+
     if (auto detected_root = detect_flashfs_root_from_spare(driver)) {
         const uint32_t detected_fs_offset = detected_root->block_idx * driver.lil_block_length();
-        Log::Info("Detected FlashFS from spare data at 0x{:x} (header hint: 0x{:x})",
-                  detected_fs_offset, results.fs_offset);
+        Log::Info("Detected FlashFS from spare data at 0x{:x} (block 0x{:x}, header hint: 0x{:x}, mobile blocks: {})",
+                  detected_fs_offset, detected_root->block_idx, results.fs_offset, mobile_blocks);
         results.fs_offset = detected_fs_offset;
         results.fs_block_idx = static_cast<uint16_t>(detected_root->block_idx);
     } else {
-        results.fs_block_idx = fs_offset_to_block_idx(driver, results.fs_offset);
+        auto base_fs_block = fs_offset_to_block_idx(driver, results.fs_offset);
+        if (base_fs_block) {
+            results.fs_block_idx = static_cast<uint16_t>(*base_fs_block + mobile_blocks);
+            Log::Info("Resolved FlashFS root block index 0x{:x} from header offset 0x{:x} + {} mobile blocks",
+                      *results.fs_block_idx, results.fs_offset, mobile_blocks);
+        } else {
+            results.fs_block_idx = std::nullopt;
+        }
     }
-
-    results.mobile_results = detect_mobile_results_from_spare(driver);
     
     // Parse CB (2BL) offset
     // entrypoint at 0x08 serves as the CB offset
@@ -1605,8 +1706,79 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
     return true;
 }
 
+bool write_build_mobile_data(flash_image_t& image, uint32_t base_fs_block, uint16_t& written_mobile_blocks) {
+    written_mobile_blocks = 0;
+    if (!image.mobile_data || !image.nand_results || !image.nand_results->mobile_results) {
+        return true;
+    }
+
+    const auto& results = *image.nand_results->mobile_results;
+    const auto& data = *image.mobile_data;
+
+    const uint32_t page_length = image.driver.page_length();
+    const uint32_t block_length = image.driver.block_length();
+    if (page_length == 0 || block_length == 0) {
+        return true;
+    }
+
+    const uint32_t pages_per_block = block_length / page_length;
+    uint32_t current_block_idx = base_fs_block;
+
+    for (uint8_t block_type = 0x31; block_type <= 0x39; ++block_type) {
+        const auto* result_slot = get_mobile_result_slot(results, block_type);
+        const auto* data_slot = get_mobile_data_slot(const_cast<mobile_data_t&>(data), block_type);
+        if (!result_slot || !data_slot || !(*result_slot) || !(*data_slot)) {
+            continue;
+        }
+
+        const auto& result = **result_slot;
+        const auto& mobile_bytes = **data_slot;
+
+        if (mobile_bytes.empty()) {
+            continue;
+        }
+
+        const uint32_t start_page = current_block_idx * pages_per_block;
+        const uint32_t page_count = result.page_count;
+        const uint32_t blocks_needed = ceil_div_u32(page_count, pages_per_block);
+
+        Log::Info("build: writing mobile 0x{:02x} len 0x{:x} to block 0x{:x} ({} pages, {} blocks)...",
+                  block_type, mobile_bytes.size(), current_block_idx, page_count, blocks_needed);
+
+        const uint64_t start_byte_offset = static_cast<uint64_t>(start_page) * 0x200ULL;
+        if (!image.driver.write(static_cast<size_t>(start_byte_offset), mobile_bytes.data(), mobile_bytes.size())) {
+            Log::Error("build: failed to write mobile 0x{:02x} data", block_type);
+            return false;
+        }
+
+        if (has_spare_data(image.driver)) {
+            for (uint32_t p = 0; p < page_count; ++p) {
+                const uint32_t target_page = start_page + p;
+                const uint32_t page_in_block = p % pages_per_block;
+                const uint8_t fs_page_count = static_cast<uint8_t>(pages_per_block - page_in_block);
+
+                std::array<uint8_t, 16> spare;
+                spare.fill(0xFF);
+                image.driver.set_spare_bad_block(spare.data(), false);
+                image.driver.set_spare_seq_field(spare.data(), result.data_sequence);
+                image.driver.set_spare_block_type_field(spare.data(), result.block_type);
+                image.driver.set_spare_size_field(spare.data(), static_cast<uint16_t>(result.data_length));
+                image.driver.set_spare_page_count_field(spare.data(), fs_page_count);
+
+                image.driver.write_page_spare(target_page, spare.data());
+            }
+        }
+
+        current_block_idx += blocks_needed;
+        written_mobile_blocks += static_cast<uint16_t>(blocks_needed);
+    }
+
+    return true;
+}
+
 std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType build_type,
-                                          std::optional<ConsoleType> console_type) {
+                                          std::optional<ConsoleType> console_type,
+                                          bool nomobile) {
     flash_image_t built = image;
     const bool had_backing_image = has_backing_image(image);
 
@@ -1618,48 +1790,68 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
         return std::nullopt;
     }
 
-    if (!write_build_bootloaders(built, build_type)) {
+    uint32_t cursor = 0x8000;
+    if (!write_build_bootloaders(built, build_type, cursor)) {
         return std::nullopt;
     }
 
-    if (!write_build_jtag_payloads(built, build_type)) {
+    if (!write_build_jtag_payloads(built, build_type, cursor)) {
         return std::nullopt;
     }
 
-    if (!write_build_addon_patches(built, build_type)) {
+    if (!write_build_addon_patches(built, build_type, cursor)) {
         return std::nullopt;
     }
 
-    if (!write_build_xell(built, build_type)) {
+    if (!write_build_xell(built, build_type, cursor)) {
         return std::nullopt;
+    }
+
+    const uint32_t lil_block_len = built.driver.lil_block_length();
+    uint32_t base_fs_block = (lil_block_len > 0) ? ceil_div_u32(cursor, lil_block_len) : 0;
+
+    uint16_t written_mobile_blocks = 0;
+    if (nomobile) {
+        Log::Info("build: nomobile option set to true, skipping mobile partitions");
+    } else if (built.mobile_data) {
+        if (!write_build_mobile_data(built, base_fs_block, written_mobile_blocks)) {
+            return std::nullopt;
+        }
+    }
+
+    uint16_t fs_root_block_idx = static_cast<uint16_t>(base_fs_block + written_mobile_blocks);
+    if (nomobile && built.nand_results && built.nand_results->fs_block_idx) {
+        fs_root_block_idx = *built.nand_results->fs_block_idx;
     }
 
     const auto payloads = collect_build_flashfs_payloads(built);
-    if (payloads.empty() && had_backing_image) {
+    if (payloads.empty() && had_backing_image && written_mobile_blocks == 0) {
         Log::Info("build: no FlashFS payload changes staged, returning rebuilt donor image");
         return built.driver.image_data();
     }
 
-    auto fs_block_idx = resolve_build_fs_block_idx(built, built.driver);
-    if (!fs_block_idx) {
-        Log::Error("build: no FlashFS root block index available");
-        return std::nullopt;
-    }
-
     const uint32_t fs_version = resolve_build_fs_version(built);
     const uint32_t sys_update_addr = resolve_build_sys_update_addr(built);
-    log_flashfs_plan(built, payloads, *fs_block_idx, fs_version, sys_update_addr);
+    log_flashfs_plan(built, payloads, fs_root_block_idx, fs_version, sys_update_addr);
 
     auto fs_driver = std::make_shared<gxbuild3::utils::FlashBlockDriver>(built.driver);
     gxbuild3::bootloaders::FlashFileSystem filesystem(fs_driver);
 
-    Log::Info("Initializing FlashFS defaults at block 0x{:x}...", *fs_block_idx);
-    if (!filesystem.create_defaults(*fs_block_idx, fs_version, sys_update_addr,
+    Log::Info("Initializing FlashFS defaults at block 0x{:x}...", fs_root_block_idx);
+    if (!filesystem.create_defaults(fs_root_block_idx, fs_version, sys_update_addr,
                                     built.xconfig.has_value())) {
         Log::Error("build: failed to initialize FlashFS defaults");
         return std::nullopt;
     }
-    Log::Info("Initializing FlashFS defaults at block 0x{:x}...done!", *fs_block_idx);
+
+    for (uint32_t i = 0; i < written_mobile_blocks; ++i) {
+        const uint32_t mb_idx = base_fs_block + i;
+        if (mb_idx < built.driver.lil_block_count()) {
+            filesystem.allocate_blocks(1, static_cast<uint16_t>(mb_idx));
+        }
+    }
+
+    Log::Info("Initializing FlashFS defaults at block 0x{:x}...done!", fs_root_block_idx);
 
     for (const auto& [filename, data] : payloads) {
         gxbuild3::bootloaders::FlashFileSystemEntry* entry = nullptr;
@@ -1677,12 +1869,12 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
         Log::Info("Writing FlashFS file '{}' len 0x{:x}...done!", filename, data.size());
     }
 
-    Log::Info("Saving FlashFS to block 0x{:x}...", *fs_block_idx);
-    if (!filesystem.save(*fs_block_idx)) {
+    Log::Info("Saving FlashFS to block 0x{:x}...", fs_root_block_idx);
+    if (!filesystem.save(fs_root_block_idx)) {
         Log::Error("build: failed to save FlashFS");
         return std::nullopt;
     }
-    Log::Info("Saving FlashFS to block 0x{:x}...done!", *fs_block_idx);
+    Log::Info("Saving FlashFS to block 0x{:x}...done!", fs_root_block_idx);
 
     built.driver = *fs_driver;
     Log::Info("build: image serialization complete (0x{:x} bytes)",

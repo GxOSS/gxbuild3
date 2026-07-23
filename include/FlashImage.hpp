@@ -208,4 +208,5 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
 std::optional<build_layout_t> resolve_build_layout(const flash_image_t& image, BuildType build_type);
 
 std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType build_type,
-                                          std::optional<ConsoleType> console_type = std::nullopt);
+                                          std::optional<ConsoleType> console_type = std::nullopt,
+                                          bool nomobile = false);

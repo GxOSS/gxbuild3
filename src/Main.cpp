@@ -154,6 +154,8 @@ int main(int argc, char** argv) {
     app.add_option("--ecc", args.ecc)->description("ECC file");
     app.add_option("-s,--sha", args.sha_file)->description("SHA file path");
 
+    build_sub->add_flag("-v,--verbose", args.verbose)->description("Enable verbose trace logging");
+    build_sub->add_option("-g,--output-dir", args.output_dir)->description("Output directory");
     // output options
     build_sub->add_option("output", args.output)->description("Output file");
     app.add_option("--format", args.format)->description("Output format");
@@ -1427,8 +1429,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             std::filesystem::create_directories(output_path.parent_path());
         }
 
-        Log::Info("Building NAND image to '{}'...", output_path.string());
-        const auto built_image = build(new_nand, *args.build_type, args.console);
+        const bool nomobile = opts.nomobile.value_or(false);
+        const auto built_image = build(new_nand, *args.build_type, args.console, nomobile);
         if (!built_image) {
             Log::Error("Failed to build NAND image");
             return 1;
