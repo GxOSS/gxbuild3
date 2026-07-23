@@ -231,7 +231,7 @@ raw_nand_header_t create_synthetic_header(const flash_image_t& image,
     header.magic = bswap16(0xFF4FU);
     header.version = bswap16(static_cast<uint16_t>(resolve_synthetic_header_version(image)));
     header.entrypoint = bswap32(kSyntheticBootloaderChainOffset);
-    header.size = bswap32(sizeof(raw_nand_header_t));
+    header.size = bswap32(target.patchslot_base);
     header.kv_size = bswap32(static_cast<uint32_t>(image.keyvault ? image.keyvault->size()
                                                                   : kSyntheticKvSize));
     header.cf1_offset = bswap32(target.patchslot_base);
