@@ -21,7 +21,7 @@ BootloaderCd BootloaderCd::parse(const std::vector<uint8_t>& bytes) {
     return cd;
 }
 
-void BootloaderCd::decrypt(const uint8_t cb_b_key[16], const uint8_t cpu_key[16]) {
+void BootloaderCd::decrypt(const uint8_t cb_b_key[16]) {
     uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
     size_t payload_len = size_aligned - sizeof(bl_header);
     
@@ -33,11 +33,6 @@ void BootloaderCd::decrypt(const uint8_t cb_b_key[16], const uint8_t cpu_key[16]
     
     // HMAC with CB_B/CBB key
     ExCryptHmacSha(cb_b_key, 16, derived_key, 16, nullptr, 0, nullptr, 0, derived_key, 16);
-    
-    // HMAC with CPU Key (if provided/valid)
-    if (cpu_key != nullptr) {
-        ExCryptHmacSha(cpu_key, 16, derived_key, 16, nullptr, 0, nullptr, 0, derived_key, 16);
-    }
     
     // Decrypt everything after the first 0x20 bytes (bl_header + rsa_pub_key)
     std::vector<uint8_t> temp;

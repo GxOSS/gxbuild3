@@ -1453,8 +1453,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                                 ? cb_b_key.data()
                                 : (has_any_key_bytes(cb_key) ? cb_key.data() : nullptr);
                         if (active_cb_key) {
-                            cd.decrypt(active_cb_key,
-                                       cpu_key_bytes.size() == 16 ? cpu_key_bytes.data() : nullptr);
+                            cd.decrypt(active_cb_key);
                         }
 
                         auto cd_bytes = cd.serialize();

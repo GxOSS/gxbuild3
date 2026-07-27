@@ -1685,7 +1685,7 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
             auto cd = BootloaderCd::parse(*cd_bytes);
             const uint8_t* active_cb_key = (cb_b_key[0] != 0) ? cb_b_key : cb_key;
             if (active_cb_key[0] != 0)
-                cd.decrypt(active_cb_key, cpu_key_bytes.empty() ? nullptr : cpu_key_bytes.data());
+                cd.decrypt(active_cb_key);
 
             const auto cd_serialized = cd.serialize();
             const std::string filename = cd.is_decrypted() ? "CD.bin" : "CD_enc.bin";
@@ -1695,10 +1695,6 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
             if (active_cb_key[0] != 0) {
                 std::memcpy(cd_key, cd.header.rsa_pub_key, 16);
                 ExCryptHmacSha(active_cb_key, 16, cd_key, 16, nullptr, 0, nullptr, 0, cd_key, 16);
-                if (!cpu_key_bytes.empty()) {
-                    ExCryptHmacSha(cpu_key_bytes.data(), 16, cd_key, 16, nullptr, 0, nullptr, 0,
-                                   cd_key, 16);
-                }
             }
         }
     }
