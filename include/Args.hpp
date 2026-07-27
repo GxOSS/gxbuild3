@@ -60,7 +60,7 @@ inline const std::map<std::string, ConsoleType> kConsoleTypeMap = {
 };
 
 struct GxArgs {
-    std::string mode{"build"};
+    std::string mode;
     std::optional<BuildType> build_type;
     std::optional<ConsoleType> console;
     std::optional<std::string> cpu_key;

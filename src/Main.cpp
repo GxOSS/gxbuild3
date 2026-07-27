@@ -1,15 +1,15 @@
-#include "FlashImage.hpp"
 #include "Ascii.hpp"
+#include "FlashImage.hpp"
 #include "Log.hpp"
 #include "Options.hpp"
 #include "Utils.hpp"
 #include "bootloaders/2bl.hpp"
 #include "bootloaders/Keyvault.hpp"
-#include "bootloaders/Xboxupd.hpp"
 #include "bootloaders/SMC.hpp"
+#include "bootloaders/Xboxupd.hpp"
+#include "ini/IniParser.hpp"
 #include "patchers/BinaryParser.hpp"
 #include "patchers/Patcher.hpp"
-#include "ini/IniParser.hpp"
 #include "stfs/StfsContainer.hpp"
 
 #include <CLI/App.hpp>
@@ -129,7 +129,8 @@ int main(int argc, char** argv) {
 
     // ini info
     build_sub->add_option("-e,--preset", args.preset)->description("Preset name");
-    build_sub->add_option("-t,--type", build_type_str)->required()
+    build_sub->add_option("-t,--type", build_type_str)
+        ->required()
         ->description("Build type (retail, jtag, glitch, glitch2, glitch2m, glitch3, devkit)");
     build_sub->add_option("-c,--console", console_str)->description("Console revision")->required();
     build_sub->add_option("-i,--fwext", args.ini_ext)->description("Firmware extension override");
@@ -171,6 +172,12 @@ int main(int argc, char** argv) {
                        "Extract xboxupd.bin and split it into cf.bin/cg.bin");
 
     app.require_subcommand(0, 1);
+
+    if (argc == 1) {
+        std::cout << app.help() << std::endl;
+        return 0;
+    }
+
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& e) {
@@ -364,6 +371,51 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             Log::Info("CPU key loaded from merged options");
         }
     }
+
+    if (cpu_key_bytes.empty()) {
+        std::filesystem::path search_dir = args.data_dir.value_or(std::filesystem::current_path());
+        if (std::filesystem::exists(search_dir) && std::filesystem::is_directory(search_dir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(search_dir)) {
+                if (!entry.is_regular_file())
+                    continue;
+                std::string fname = entry.path().filename().string();
+                std::string fname_lower = fname;
+                std::transform(fname_lower.begin(), fname_lower.end(), fname_lower.begin(),
+                               ::tolower);
+                if (fname_lower == "cpukey.txt" || fname_lower == "cpukey.bin") {
+                    if (fname_lower == "cpukey.bin") {
+                        auto file_data = ReadFile(entry.path());
+                        if (file_data && file_data->size() == 16) {
+                            cpu_key_bytes = std::move(*file_data);
+                            Log::Info("CPU key loaded from '{}'", entry.path().filename().string());
+                            break;
+                        }
+                    } else if (fname_lower == "cpukey.txt") {
+                        auto file_data = ReadFile(entry.path());
+                        if (file_data) {
+                            std::string content(file_data->begin(), file_data->end());
+                            // Trim whitespace
+                            content.erase(content.find_last_not_of(" \t\n\r") + 1);
+                            content.erase(0, content.find_first_not_of(" \t\n\r"));
+                            auto parsed = HexToBytes(content);
+                            if (parsed && parsed->size() == 16) {
+                                cpu_key_bytes = std::move(*parsed);
+                                Log::Info("CPU key loaded from '{}'",
+                                          entry.path().filename().string());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (cpu_key_bytes.empty()) {
+        cpu_key_bytes.assign(16, 0);
+        Log::Info("No CPU key provided, defaulting to all 0s");
+    }
+
     if (bl_key_bytes.empty() && options.key_1bl) {
         auto parsed = HexToBytes(*options.key_1bl);
         if (parsed && parsed->size() == 16) {
@@ -372,9 +424,36 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         }
     }
 
+    if (bl_key_bytes.empty()) {
+        auto parsed = HexToBytes("DD88AD0C9ED669E7B56794FB68563EFA");
+        if (parsed && parsed->size() == 16) {
+            bl_key_bytes = std::move(*parsed);
+            Log::Info("1BL key defaulted to DD88AD0C9ED669E7B56794FB68563EFA");
+        }
+    }
+
     Options::Init(options);
 
     if (args.mode == "extract") {
+        if (!args.source_nand) {
+            static const std::vector<std::string> kDonorCandidates = {"nanddump.bin"};
+            std::vector<std::filesystem::path> search_roots;
+            if (args.fw_dir)
+                search_roots.push_back(*args.fw_dir);
+            search_roots.push_back(std::filesystem::current_path());
+
+            for (const auto& candidate : kDonorCandidates) {
+                for (const auto& root : search_roots) {
+                    if (std::filesystem::exists(root / candidate)) {
+                        args.source_nand = (root / candidate).string();
+                        break;
+                    }
+                }
+                if (args.source_nand)
+                    break;
+            }
+        }
+
         if (!args.source_nand) {
             Log::Error("Extraction requires a source NAND image (-l,--image)");
             return 1;
@@ -410,7 +489,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
     std::optional<Ini::Document> build_doc;
     {
         std::filesystem::path ini_dir = args.data_dir.value_or(std::filesystem::current_path());
-        std::filesystem::path ini_path = ini_dir / (build_type_str + ".ini");
+        std::filesystem::path ini_path = ini_dir / ("_" + build_type_str + ".ini");
 
         auto res = Ini::ParseFile(ini_path);
         if (!res) {
@@ -418,7 +497,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                        Ini::ParseErrorString(res.error()));
             return 1;
         }
-        
+
         build_doc = std::move(*res);
         Log::Info("Loaded build INI: {}", ini_path.string());
     }
@@ -445,8 +524,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
         using resolved_file_t = std::pair<std::filesystem::path, std::vector<uint8_t>>;
 
-        auto load_from_root = [&](const std::filesystem::path& root, std::string_view entry_name)
-            -> std::optional<resolved_file_t> {
+        auto load_from_root = [&](const std::filesystem::path& root,
+                                  std::string_view entry_name) -> std::optional<resolved_file_t> {
             const auto candidate = root / entry_to_lookup_path(entry_name);
             auto file_data = ReadFile(candidate);
             if (!file_data) {
@@ -455,16 +534,16 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             return resolved_file_t{candidate, std::move(*file_data)};
         };
 
-        auto load_from_common_dir = [&](std::string_view entry_name)
-            -> std::optional<resolved_file_t> {
+        auto load_from_common_dir =
+            [&](std::string_view entry_name) -> std::optional<resolved_file_t> {
             if (!common_dir) {
                 return std::nullopt;
             }
             return load_from_root(*common_dir, entry_name);
         };
 
-        auto load_main_section_file = [&](std::string_view entry_name)
-            -> std::optional<resolved_file_t> {
+        auto load_main_section_file =
+            [&](std::string_view entry_name) -> std::optional<resolved_file_t> {
             if (auto loaded = load_from_root(fw_dir, entry_name)) {
                 return loaded;
             }
@@ -577,7 +656,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             return std::nullopt;
         };
 
-        auto load_stage_or_xboxupd = [&](std::string_view entry_name) -> std::optional<resolved_file_t> {
+        auto load_stage_or_xboxupd =
+            [&](std::string_view entry_name) -> std::optional<resolved_file_t> {
             if (auto loaded = load_main_section_file(entry_name)) {
                 return loaded;
             }
@@ -596,10 +676,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 return std::nullopt;
             }
 
-            const auto source_path = std::filesystem::path{
-                wants_cf ? "<xboxupd>/cf.bin" : "<xboxupd>/cg.bin"};
-            return resolved_file_t{source_path, wants_cf ? xboxupd_parts->cf_raw
-                                                         : xboxupd_parts->cg_raw};
+            const auto source_path =
+                std::filesystem::path{wants_cf ? "<xboxupd>/cf.bin" : "<xboxupd>/cg.bin"};
+            return resolved_file_t{source_path,
+                                   wants_cf ? xboxupd_parts->cf_raw : xboxupd_parts->cg_raw};
         };
 
         auto load_xell_file = [&]() -> std::optional<resolved_file_t> {
@@ -613,11 +693,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             return load_payload_file(kGlitchXellName);
         };
 
-        const bool is_xell_build_type = args.build_type &&
-                                        (*args.build_type == BuildType::Jtag ||
-                                         *args.build_type == BuildType::Glitch ||
-                                         *args.build_type == BuildType::Glitch2 ||
-                                         *args.build_type == BuildType::Glitch3);
+        const bool is_xell_build_type =
+            args.build_type &&
+            (*args.build_type == BuildType::Jtag || *args.build_type == BuildType::Glitch ||
+             *args.build_type == BuildType::Glitch2 || *args.build_type == BuildType::Glitch3);
 
         std::string section_name;
         if (args.console) {
@@ -626,22 +705,22 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 {ConsoleType::Zephyr, "zephyr"},
                 {ConsoleType::Falcon, "falcon"},
                 {ConsoleType::Jasper, "jasper"},
-                {ConsoleType::JasperBB, "jasperbb"},
-                {ConsoleType::JasperBigFFS, "jasperbigffs"},
+                {ConsoleType::Jasper256, "jasper"},
+                {ConsoleType::Jasper512, "jasper"},
+                {ConsoleType::JasperBB, "jasper"},
+                {ConsoleType::JasperBigFFS, "jasper"},
                 {ConsoleType::Trinity, "trinity"},
-                {ConsoleType::TrinityBB, "trinitybb"},
-                {ConsoleType::TrinityBigFFS, "trinitybigffs"},
+                {ConsoleType::TrinityBB, "trinity"},
+                {ConsoleType::TrinityBigFFS, "trinity"},
                 {ConsoleType::Corona, "corona"},
-                {ConsoleType::Corona4G, "corona4g"},
+                {ConsoleType::Corona4G, "corona"},
                 {ConsoleType::Winchester, "winchester"},
-                {ConsoleType::Winchester4G, "winchester4g"},
+                {ConsoleType::Winchester4G, "winchester"},
             };
             auto it = kConsoleSectionSuffix.find(*args.console);
             if (it != kConsoleSectionSuffix.end())
                 section_name = it->second + "bl";
         }
-
-
 
         {
             std::optional<std::filesystem::path> stfs_path;
@@ -698,21 +777,30 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             }
 
             switch (*args.console) {
-                case ConsoleType::Xenon: return "xenon";
-                case ConsoleType::Zephyr: return "zephyr";
-                case ConsoleType::Falcon: return "falcon";
-                case ConsoleType::Jasper: return "jasper";
-                case ConsoleType::Jasper256: return "jasper256";
-                case ConsoleType::Jasper512: return "jasper512";
-                case ConsoleType::JasperBB: return "jasperbb";
-                case ConsoleType::JasperBigFFS: return "jasperbigffs";
-                case ConsoleType::Trinity: return "trinity";
-                case ConsoleType::TrinityBB: return "trinitybb";
-                case ConsoleType::TrinityBigFFS: return "trinitybigffs";
-                case ConsoleType::Corona: return "corona";
-                case ConsoleType::Corona4G: return "corona4g";
-                case ConsoleType::Winchester: return "winchester";
-                case ConsoleType::Winchester4G: return "winchester4g";
+                case ConsoleType::Xenon:
+                    return "xenon";
+                case ConsoleType::Zephyr:
+                    return "zephyr";
+                case ConsoleType::Falcon:
+                    return "falcon";
+                case ConsoleType::Jasper:
+                case ConsoleType::Jasper256:
+                case ConsoleType::Jasper512:
+                case ConsoleType::JasperBB:
+                case ConsoleType::JasperBigFFS:
+                    return "jasper";
+                case ConsoleType::Trinity:
+                case ConsoleType::TrinityBB:
+                case ConsoleType::TrinityBigFFS:
+                    return "trinity";
+                case ConsoleType::Corona:
+                    return "corona";
+                case ConsoleType::Corona4G:
+                    return "corona4g";
+                case ConsoleType::Winchester:
+                    return "winchester";
+                case ConsoleType::Winchester4G:
+                    return "winchester4g";
             }
 
             return {};
@@ -759,10 +847,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 return 1;
             }
 
-            auto load_addon_file = [&](std::string_view addon_name)
-                -> std::optional<resolved_file_t> {
-                const auto try_load = [&](std::string_view candidate_name)
-                    -> std::optional<resolved_file_t> {
+            auto load_addon_file =
+                [&](std::string_view addon_name) -> std::optional<resolved_file_t> {
+                const auto try_load =
+                    [&](std::string_view candidate_name) -> std::optional<resolved_file_t> {
                     if (auto loaded = load_from_root(data_dir, candidate_name)) {
                         return loaded;
                     }
@@ -792,12 +880,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 return 1;
             }
 
-            auto raw_tail_it = std::find_if(
-                parsed_patchset->sections.begin(), parsed_patchset->sections.end(),
-                [](const ParsedPatchSection& section) {
-                    return section.target == PatchSectionTarget::Khv ||
-                           section.target == PatchSectionTarget::JtagSection4;
-                });
+            auto raw_tail_it =
+                std::find_if(parsed_patchset->sections.begin(), parsed_patchset->sections.end(),
+                             [](const ParsedPatchSection& section) {
+                                 return section.target == PatchSectionTarget::Khv ||
+                                        section.target == PatchSectionTarget::JtagSection4;
+                             });
             if (raw_tail_it == parsed_patchset->sections.end()) {
                 Log::Error("Parsed patchset '{}' is missing a raw insert section", patch.string());
                 return 1;
@@ -826,18 +914,21 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
         // open nand, grab keyvault & smc
         if (!args.source_nand) {
-            static const std::vector<std::string> kDonorCandidates = {
-                "nand.bin", "donor.bin", "nanddump.bin", "orig.bin", "source.bin", "image.bin"
-            };
-            std::filesystem::path search_root = args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path()));
+            static const std::vector<std::string> kDonorCandidates = {"nanddump.bin"};
+            std::vector<std::filesystem::path> search_roots;
+            if (args.fw_dir)
+                search_roots.push_back(*args.fw_dir);
+            search_roots.push_back(std::filesystem::current_path());
+
             for (const auto& candidate : kDonorCandidates) {
-                if (std::filesystem::exists(search_root / candidate)) {
-                    args.source_nand = (search_root / candidate).string();
-                    break;
-                } else if (std::filesystem::exists(std::filesystem::current_path() / candidate)) {
-                    args.source_nand = candidate;
-                    break;
+                for (const auto& root : search_roots) {
+                    if (std::filesystem::exists(root / candidate)) {
+                        args.source_nand = (root / candidate).string();
+                        break;
+                    }
                 }
+                if (args.source_nand)
+                    break;
             }
         }
 
@@ -845,7 +936,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             std::filesystem::path source_nand_path = *args.source_nand;
             if (!std::filesystem::exists(source_nand_path)) {
                 std::filesystem::path alt_path =
-                    args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path())) / *args.source_nand;
+                    args.fw_dir.value_or(args.data_dir.value_or(std::filesystem::current_path())) /
+                    *args.source_nand;
                 if (std::filesystem::exists(alt_path)) {
                     source_nand_path = alt_path;
                 }
@@ -855,7 +947,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 Log::Error("Failed to read source NAND file: {}", source_nand_path.string());
                 return 1;
             }
-            Log::Info("Parsing source NAND image '{}' ({} bytes)...", source_nand_path.string(), source_nand_data->size());
+            Log::Info("Parsing source NAND image '{}' ({} bytes)...", source_nand_path.string(),
+                      source_nand_data->size());
             donor_nand = FlashImage::parse(*source_nand_data);
             if (!donor_nand->nand_results || !donor_nand->nand_results->valid) {
                 Log::Error("Failed to parse source NAND file: {}", source_nand_path.string());
@@ -890,20 +983,18 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
             if (!opts.smcnocheck.value_or(false)) {
                 static const std::map<uint8_t, std::string_view> kSmcConsoleNibble = {
-                    {1, "Xenon"}, {2, "Zephyr"}, {3, "Falcon/Opus"},
+                    {1, "Xenon"},  {2, "Zephyr"},  {3, "Falcon/Opus"},
                     {4, "Jasper"}, {5, "Trinity"}, {6, "Corona"},
                 };
                 static const std::map<ConsoleType, uint8_t> kExpectedNibble = {
-                    {ConsoleType::Xenon, 1},
-                    {ConsoleType::Zephyr, 2},
-                    {ConsoleType::Falcon, 3},
-                    {ConsoleType::Jasper, 4},   {ConsoleType::Jasper256, 4},
-                    {ConsoleType::Jasper512, 4}, {ConsoleType::JasperBB, 4},
-                    {ConsoleType::JasperBigFFS, 4},
-                    {ConsoleType::Trinity, 5},   {ConsoleType::TrinityBB, 5},
-                    {ConsoleType::TrinityBigFFS, 5},
-                    {ConsoleType::Corona, 6},    {ConsoleType::Corona4G, 6},
-                    {ConsoleType::Winchester, 6}, {ConsoleType::Winchester4G, 6},
+                    {ConsoleType::Xenon, 1},         {ConsoleType::Zephyr, 2},
+                    {ConsoleType::Falcon, 3},        {ConsoleType::Jasper, 4},
+                    {ConsoleType::Jasper256, 4},     {ConsoleType::Jasper512, 4},
+                    {ConsoleType::JasperBB, 4},      {ConsoleType::JasperBigFFS, 4},
+                    {ConsoleType::Trinity, 5},       {ConsoleType::TrinityBB, 5},
+                    {ConsoleType::TrinityBigFFS, 5}, {ConsoleType::Corona, 6},
+                    {ConsoleType::Corona4G, 6},      {ConsoleType::Winchester, 6},
+                    {ConsoleType::Winchester4G, 6},
                 };
 
                 const uint8_t smc_nibble = (smc[0x100] >> 4) & 0xF;
@@ -925,31 +1016,37 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 const SmcType smc_type = smc_get_type(smc);
                 Log::Info("SMC patch type: {}", smc_type_name(smc_type));
 
-                const bool build_is_retail = args.build_type && *args.build_type == BuildType::Retail;
-                const bool build_is_jtag   = args.build_type && *args.build_type == BuildType::Jtag;
-                const bool build_is_glitch = args.build_type &&
-                    (*args.build_type == BuildType::Glitch  ||
-                     *args.build_type == BuildType::Glitch2 ||
-                     *args.build_type == BuildType::Glitch2m ||
-                     *args.build_type == BuildType::Glitch3);
+                const bool build_is_retail =
+                    args.build_type && *args.build_type == BuildType::Retail;
+                const bool build_is_jtag = args.build_type && *args.build_type == BuildType::Jtag;
+                const bool build_is_glitch =
+                    args.build_type && (*args.build_type == BuildType::Glitch ||
+                                        *args.build_type == BuildType::Glitch2 ||
+                                        *args.build_type == BuildType::Glitch2m ||
+                                        *args.build_type == BuildType::Glitch3);
 
                 const bool smc_is_retail = smc_type == SmcType::Retail;
-                const bool smc_is_jtag   = smc_type == SmcType::Jtag || smc_type == SmcType::RJtag ||
-                                           smc_type == SmcType::Cygnos || smc_type == SmcType::RJtagCygnos;
-                const bool smc_is_glitch = smc_type == SmcType::Glitch || smc_type == SmcType::RJtag ||
-                                           smc_type == SmcType::RJtagCygnos || smc_type == SmcType::CR4 ||
-                                           smc_type == SmcType::SmcPlus || smc_type == SmcType::Rgh3V1 ||
-                                           smc_type == SmcType::Rgh3V2 || smc_type == SmcType::Rgh13;
+                const bool smc_is_jtag = smc_type == SmcType::Jtag || smc_type == SmcType::RJtag ||
+                                         smc_type == SmcType::Cygnos ||
+                                         smc_type == SmcType::RJtagCygnos;
+                const bool smc_is_glitch =
+                    smc_type == SmcType::Glitch || smc_type == SmcType::RJtag ||
+                    smc_type == SmcType::RJtagCygnos || smc_type == SmcType::CR4 ||
+                    smc_type == SmcType::SmcPlus || smc_type == SmcType::Rgh3V1 ||
+                    smc_type == SmcType::Rgh3V2 || smc_type == SmcType::Rgh13;
 
                 if (build_is_retail && !smc_is_retail) {
                     Log::Warn("Build type is retail but SMC appears to be '{}' "
-                              "-- pass smcnocheck=true to suppress", smc_type_name(smc_type));
+                              "-- pass smcnocheck=true to suppress",
+                              smc_type_name(smc_type));
                 } else if (build_is_jtag && !smc_is_jtag) {
                     Log::Warn("Build type is JTAG but SMC appears to be '{}' "
-                              "-- pass smcnocheck=true to suppress", smc_type_name(smc_type));
+                              "-- pass smcnocheck=true to suppress",
+                              smc_type_name(smc_type));
                 } else if (build_is_glitch && !smc_is_glitch) {
                     Log::Warn("Build type is Glitch but SMC appears to be '{}' "
-                              "-- pass smcnocheck=true to suppress", smc_type_name(smc_type));
+                              "-- pass smcnocheck=true to suppress",
+                              smc_type_name(smc_type));
                 }
             } else {
                 Log::Warn("SMC checks skipped (smcnocheck)");
@@ -1003,14 +1100,13 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             }
         }
 
-        
         const Ini::Section* sec_sec = build_doc->get("security");
         const Ini::Section* flashfs_sec = build_doc->get("flashfs");
         const Ini::Section* payloads_sec = build_doc->get("payloads");
-        (void)payloads_sec;
+        (void) payloads_sec;
 
-        auto stfs_file_to_u8 = [&stfs_files, &normalize_file_key](std::string_view name)
-            -> std::optional<std::vector<uint8_t>> {
+        auto stfs_file_to_u8 = [&stfs_files, &normalize_file_key](
+                                   std::string_view name) -> std::optional<std::vector<uint8_t>> {
             if (!stfs_files) {
                 return std::nullopt;
             }
@@ -1064,8 +1160,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             return std::any_of(key.begin(), key.end(), [](uint8_t byte) { return byte != 0; });
         };
 
-        auto apply_glitch_patch_section = [&](std::vector<uint8_t>& bytes, PatchSectionTarget target,
-                                             std::string_view stage_name) -> bool {
+        auto apply_glitch_patch_section = [&](std::vector<uint8_t>& bytes,
+                                              PatchSectionTarget target,
+                                              std::string_view stage_name) -> bool {
             const auto* section = find_patch_section(target);
             if (!section) {
                 return true;
@@ -1089,24 +1186,23 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                 required_end = std::max(required_end, entry_end);
             }
 
-            Log::Info(
-                "Applying {} patch section '{}' (entries={}, patch_words=0x{:x}, patch_bytes=0x{:x}, target_buffer=0x{:x})",
-                stage_name, section->identifier, section->entries.size(), total_patch_words,
-                total_patch_words * sizeof(uint32_t), bytes.size());
+            Log::Info("Applying {} patch section '{}' (entries={}, patch_words=0x{:x}, "
+                      "patch_bytes=0x{:x}, target_buffer=0x{:x})",
+                      stage_name, section->identifier, section->entries.size(), total_patch_words,
+                      total_patch_words * sizeof(uint32_t), bytes.size());
 
             if (required_end > bytes.size()) {
-                Log::Info(
-                    "Extending {} patch target buffer for section '{}' from 0x{:x} to 0x{:x}",
-                    stage_name, section->identifier, bytes.size(), required_end);
+                Log::Info("Extending {} patch target buffer for section '{}' from 0x{:x} to 0x{:x}",
+                          stage_name, section->identifier, bytes.size(), required_end);
                 bytes.resize(static_cast<size_t>(required_end), 0x00);
             }
 
             if (!XePatch::ApplyPatchSection(bytes.data(), static_cast<uint32_t>(bytes.size()),
                                             xe_section)) {
-                Log::Error(
-                    "Failed to apply {} patch section '{}' (entries={}, patch_words=0x{:x}, patch_bytes=0x{:x}, target_buffer=0x{:x})",
-                    stage_name, section->identifier, section->entries.size(), total_patch_words,
-                    total_patch_words * sizeof(uint32_t), bytes.size());
+                Log::Error("Failed to apply {} patch section '{}' (entries={}, patch_words=0x{:x}, "
+                           "patch_bytes=0x{:x}, target_buffer=0x{:x})",
+                           stage_name, section->identifier, section->entries.size(),
+                           total_patch_words, total_patch_words * sizeof(uint32_t), bytes.size());
                 return false;
             }
 
@@ -1130,11 +1226,13 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             return true;
         };
 
-        auto load_security_common_file = [&](std::string_view entry_name)
-            -> std::optional<resolved_file_t> { return load_from_common_dir(entry_name); };
+        auto load_security_common_file =
+            [&](std::string_view entry_name) -> std::optional<resolved_file_t> {
+            return load_from_common_dir(entry_name);
+        };
 
-        auto load_flashfs_payload_file = [&](std::string_view entry_name)
-            -> std::optional<resolved_file_t> {
+        auto load_flashfs_payload_file =
+            [&](std::string_view entry_name) -> std::optional<resolved_file_t> {
             if (auto loaded = load_from_root(fw_dir, entry_name)) {
                 return loaded;
             }
@@ -1233,7 +1331,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             }
         }
 
-
         std::array<uint8_t, 16> cb_key{};
         std::array<uint8_t, 16> cb_b_key{};
         std::optional<bl2_header> cb_a_header;
@@ -1250,8 +1347,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
                 auto resolved_stage = load_stage_or_xboxupd(entry.key);
                 if (!resolved_stage) {
-                    Log::Warn("Stage file '{}' not found in fw/data/common directories",
-                              entry.key);
+                    Log::Warn("Stage file '{}' not found in fw/data/common directories", entry.key);
                     continue;
                 }
 
@@ -1295,7 +1391,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                         }
                     } else if (key_lower.starts_with("cbb")) {
                         auto cbb = BootloaderCb::parse(stage_data);
-                        if (cb_a_header && has_any_key_bytes(cb_key) && cpu_key_bytes.size() == 16) {
+                        if (cb_a_header && has_any_key_bytes(cb_key) &&
+                            cpu_key_bytes.size() == 16) {
                             cbb.decrypt_v2(*cb_a_header, cb_key.data(), cpu_key_bytes.data());
                         }
                         auto cbb_bytes = cbb.serialize();
@@ -1405,20 +1502,20 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             return 1;
         }
 
-        std::string out_divider = "---------------------------------------------------------------\n";
+        std::string out_divider =
+            "---------------------------------------------------------------\n";
 
-
-
-        Log::Info(
-            "Build preparation complete: donor={}, smc={}, kv={}, cb={}, cbx={}, cbb={}, sc={}, cd={}, ce={}, patchslot0={}, patchslot1={}, payloads={}, xell={}, flashfs_files={}, flashfs_payloads={}",
-            donor_nand.has_value() ? "yes" : "no", new_nand.smc ? "yes" : "no",
-            new_nand.keyvault ? "yes" : "no", new_nand.cb_or_A ? "yes" : "no",
-            new_nand.cb_X ? "yes" : "no", new_nand.cb_B ? "yes" : "no",
-            new_nand.sc ? "yes" : "no", new_nand.cd ? "yes" : "no",
-            new_nand.ce ? "yes" : "no", new_nand.patchslot_0 ? "yes" : "no",
-            new_nand.patchslot_1 ? "yes" : "no", new_nand.payloads ? "yes" : "no",
-            (new_nand.xellblock && new_nand.xellblock->xell_main) ? "yes" : "no",
-            new_nand.flashfs_files ? "yes" : "no", new_nand.flashfs_payloads ? "yes" : "no");
+        Log::Info("Build preparation complete: donor={}, smc={}, kv={}, cb={}, cbx={}, cbb={}, "
+                  "sc={}, cd={}, ce={}, patchslot0={}, patchslot1={}, payloads={}, xell={}, "
+                  "flashfs_files={}, flashfs_payloads={}",
+                  donor_nand.has_value() ? "yes" : "no", new_nand.smc ? "yes" : "no",
+                  new_nand.keyvault ? "yes" : "no", new_nand.cb_or_A ? "yes" : "no",
+                  new_nand.cb_X ? "yes" : "no", new_nand.cb_B ? "yes" : "no",
+                  new_nand.sc ? "yes" : "no", new_nand.cd ? "yes" : "no",
+                  new_nand.ce ? "yes" : "no", new_nand.patchslot_0 ? "yes" : "no",
+                  new_nand.patchslot_1 ? "yes" : "no", new_nand.payloads ? "yes" : "no",
+                  (new_nand.xellblock && new_nand.xellblock->xell_main) ? "yes" : "no",
+                  new_nand.flashfs_files ? "yes" : "no", new_nand.flashfs_payloads ? "yes" : "no");
 
         std::filesystem::path output_path = *args.output;
         if (args.output_dir && output_path.is_relative()) {
@@ -1473,12 +1570,16 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                             serial_str = serial_buf;
                         }
 
-                        mobo_serial_str = bytes_to_hex(std::span<const uint8_t>(kv_dec.data() + 0xC0, 8));
-                        dvd_key_str = bytes_to_hex(std::span<const uint8_t>(kv_dec.data() + 0x100, 16));
+                        mobo_serial_str =
+                            bytes_to_hex(std::span<const uint8_t>(kv_dec.data() + 0xC0, 8));
+                        dvd_key_str =
+                            bytes_to_hex(std::span<const uint8_t>(kv_dec.data() + 0x100, 16));
 
                         if (kv_dec.size() >= 0x9C8 + sizeof(XE_CONSOLE_CERTIFICATE)) {
-                            const auto* cert = reinterpret_cast<const XE_CONSOLE_CERTIFICATE*>(kv_dec.data() + 0x9C8);
-                            console_id_str = bytes_to_hex(std::span<const uint8_t>(cert->ConsoleId, 5));
+                            const auto* cert = reinterpret_cast<const XE_CONSOLE_CERTIFICATE*>(
+                                kv_dec.data() + 0x9C8);
+                            console_id_str =
+                                bytes_to_hex(std::span<const uint8_t>(cert->ConsoleId, 5));
 
                             char mfg_buf[9] = {0};
                             std::memcpy(mfg_buf, cert->ManufacturingDate, 8);
@@ -1510,7 +1611,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         std::string nand_size_disp = "16MiB";
         if (new_nand.driver.flash_config() == gxbuild3::utils::FlashConfig::Corona4GB) {
             nand_size_disp = "48MiB MMC (system only)";
-        } else if (new_nand.driver.flash_config() == gxbuild3::utils::FlashConfig::Jasper256_512_LargeBlock) {
+        } else if (new_nand.driver.flash_config() ==
+                   gxbuild3::utils::FlashConfig::Jasper256_512_LargeBlock) {
             nand_size_disp = "256/512MiB (big block)";
         } else if (new_nand.driver.image_length_real() >= 0x04000000) {
             nand_size_disp = "64MiB";
@@ -1521,8 +1623,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             console_disp[0] = static_cast<char>(std::toupper(console_disp[0]));
         }
 
-        std::string cpu_key_disp = args.cpu_key ? *args.cpu_key : "D5E4BC0FB6A46C398CCD21DE21E14F4F";
-        std::string bl_key_disp = args.bl_key ? *args.bl_key : "DD88AD0C9ED669E7B56794FB68563EFA";
+        std::string cpu_key_disp;
+        for (uint8_t b : cpu_key_bytes)
+            cpu_key_disp += fmt::format("{:02X}", b);
+        std::string bl_key_disp;
+        for (uint8_t b : bl_key_bytes)
+            bl_key_disp += fmt::format("{:02X}", b);
         std::string cf_ldv_disp = opts.cfldv.value_or("12");
 
         std::string out_string = fmt::format(
@@ -1546,11 +1652,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             "{}"
             "    gxbuild3 Finished. Have a nice day.\n"
             "{}",
-            out_divider, output_path.filename().string(), out_divider,
-            args.data_dir->string(), console_disp, nand_size_disp, build_type_disp,
-            serial_str, console_id_str, mobo_serial_str, mfg_date_str,
-            cpu_key_disp, bl_key_disp, dvd_key_str, cf_ldv_disp, kv_type_str,
-            out_divider, out_divider);
+            out_divider, output_path.filename().string(), out_divider, args.data_dir->string(),
+            console_disp, nand_size_disp, build_type_disp, serial_str, console_id_str,
+            mobo_serial_str, mfg_date_str, cpu_key_disp, bl_key_disp, dvd_key_str, cf_ldv_disp,
+            kv_type_str, out_divider, out_divider);
 
         Log::Info("\n{}", out_string);
     }
