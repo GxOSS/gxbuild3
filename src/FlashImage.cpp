@@ -748,7 +748,7 @@ namespace {
                                              flashfs_payload_map_t& payloads) {
         const auto assign_if_present =
             [&payloads](std::string_view name, const std::optional<std::vector<uint8_t>>& data) {
-                if (data) {
+                if (data && !payloads.contains(name)) {
                     payloads[std::string{name}] = *data;
                 }
             };
@@ -762,13 +762,43 @@ namespace {
 
     flashfs_payload_map_t collect_build_flashfs_payloads(const flash_image_t& image) {
         flashfs_payload_map_t payloads;
-        if (image.flashfs_files) {
-            add_known_flashfs_files_to_payloads(*image.flashfs_files, payloads);
-        }
+
+        auto add_payload_if_present = [&](std::string_view target_name) {
+            if (image.flashfs_payloads) {
+                for (const auto& [name, data] : *image.flashfs_payloads) {
+                    std::string clean_name{name};
+                    std::replace(clean_name.begin(), clean_name.end(), '\\', '/');
+                    auto pos = clean_name.rfind('/');
+                    if (pos != std::string::npos) {
+                        clean_name = clean_name.substr(pos + 1);
+                    }
+                    if (clean_name == target_name) {
+                        payloads[clean_name] = data;
+                        break;
+                    }
+                }
+            }
+        };
+
+        // Put sysupdate.xexp1 and sysupdate.xexp2 first if present
+        add_payload_if_present("sysupdate.xexp1");
+        add_payload_if_present("sysupdate.xexp2");
+
         if (image.flashfs_payloads) {
             for (const auto& [name, data] : *image.flashfs_payloads) {
-                payloads[name] = data;
+                std::string clean_name{name};
+                std::replace(clean_name.begin(), clean_name.end(), '\\', '/');
+                auto pos = clean_name.rfind('/');
+                if (pos != std::string::npos) {
+                    clean_name = clean_name.substr(pos + 1);
+                }
+                if (!payloads.contains(clean_name)) {
+                    payloads[clean_name] = data;
+                }
             }
+        }
+        if (image.flashfs_files) {
+            add_known_flashfs_files_to_payloads(*image.flashfs_files, payloads);
         }
         return payloads;
     }
@@ -1947,6 +1977,49 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
             return std::nullopt;
         }
         Log::Info("Writing FlashFS file '{}' len 0x{:x}...done!", filename, data.size());
+
+        // Update CF header/metadata block list if this is a sysupdate.xexp file
+        if (filename == "sysupdate.xexp1" || filename == "sysupdate.xexp2") {
+            bool is_slot1 = (filename == "sysupdate.xexp2");
+            auto& patchslot = is_slot1 ? built.patchslot_1 : built.patchslot_0;
+            if (patchslot && patchslot->cf) {
+                size_t chain_len = 0;
+                auto chain = filesystem.get_chain(entry->block_number, chain_len);
+                if (chain && !chain->empty()) {
+                    uint32_t patchslot_offset = is_slot1
+                        ? (built.header.cf1_offset ? bswap32(built.header.cf1_offset) + 0x10000 : 0)
+                        : (built.header.cf1_offset ? bswap32(built.header.cf1_offset) : 0);
+
+                    // Update total CG size in CF header (0x10000 base + overflow size)
+                    uint32_t total_cg_size = 0x10000 + static_cast<uint32_t>(data.size());
+                    auto& cf_bytes = *patchslot->cf;
+                    if (cf_bytes.size() >= sizeof(bl6_header)) {
+                        // Offset 0x1C in bl6_header is cg_size
+                        uint32_t cg_size_be = bswap32(total_cg_size);
+                        std::memcpy(cf_bytes.data() + 0x1C, &cg_size_be, sizeof(uint32_t));
+
+                        // If CF data payload contains decrypted metadata (starts at 0x30):
+                        // 0x30: uint16_t cg_blocks_used
+                        // 0x32: uint16_t cg_block_numbers[chain->size()]
+                        if (cf_bytes.size() >= 0x32 + (chain->size() * 2)) {
+                            uint16_t blocks_used_be = bswap16(static_cast<uint16_t>(chain->size()));
+                            std::memcpy(cf_bytes.data() + 0x30, &blocks_used_be, sizeof(uint16_t));
+                            for (size_t b_idx = 0; b_idx < chain->size(); ++b_idx) {
+                                uint16_t block_be = bswap16((*chain)[b_idx]);
+                                std::memcpy(cf_bytes.data() + 0x32 + (b_idx * 2), &block_be, sizeof(uint16_t));
+                            }
+                            Log::Info("Updated CF ({}) header with {} FlashFS block(s) for '{}' (total CG size 0x{:x})",
+                                      is_slot1 ? "slot 1" : "slot 0", chain->size(), filename, total_cg_size);
+                        }
+
+                        // Re-write updated CF to NAND image driver
+                        if (patchslot_offset != 0) {
+                            built.driver.write(patchslot_offset, cf_bytes.data(), cf_bytes.size());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Log::Info("Saving FlashFS to block 0x{:x}...", fs_root_block_idx);

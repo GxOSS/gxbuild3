@@ -10,6 +10,8 @@
 #include "ini/IniParser.hpp"
 #include "patchers/BinaryParser.hpp"
 #include "patchers/Patcher.hpp"
+#include "patchers/Patches.hpp"
+#include "patchers/Signature.hpp"
 #include "stfs/StfsContainer.hpp"
 
 #include <CLI/App.hpp>
@@ -512,7 +514,20 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
         auto normalize_file_key = [](std::string key) {
             std::replace(key.begin(), key.end(), '\\', '/');
+            auto pos = key.rfind('/');
+            if (pos != std::string::npos) {
+                key = key.substr(pos + 1);
+            }
             std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+            return key;
+        };
+
+        auto sanitize_file_key = [](std::string key) {
+            std::replace(key.begin(), key.end(), '\\', '/');
+            auto pos = key.rfind('/');
+            if (pos != std::string::npos) {
+                key = key.substr(pos + 1);
+            }
             return key;
         };
 
@@ -1044,9 +1059,24 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                               "-- pass smcnocheck=true to suppress",
                               smc_type_name(smc_type));
                 } else if (build_is_glitch && !smc_is_glitch) {
-                    Log::Warn("Build type is Glitch but SMC appears to be '{}' "
-                              "-- pass smcnocheck=true to suppress",
-                              smc_type_name(smc_type));
+                    const bool is_glitch1_or_2 = args.build_type &&
+                        (*args.build_type == BuildType::Glitch || *args.build_type == BuildType::Glitch2);
+
+                    if (is_glitch1_or_2 && smc_is_retail) {
+                        Log::Info("Retail SMC detected in {} mode, applying Glitch SMC patch...",
+                                  *args.build_type == BuildType::Glitch ? "glitch" : "glitch2");
+                        uint32_t patches_applied = Signature::ApplyPatch(
+                            smc.data(), static_cast<uint32_t>(smc.size()), Glitch.addr, Glitch.value);
+                        if (patches_applied > 0) {
+                            Log::Info("Applied {} Glitch SMC patch match(es)", patches_applied);
+                        } else {
+                            Log::Warn("Failed to match Glitch SMC patch pattern in retail SMC");
+                        }
+                    } else {
+                        Log::Warn("Build type is Glitch but SMC appears to be '{}' "
+                                  "-- pass smcnocheck=true to suppress",
+                                  smc_type_name(smc_type));
+                    }
                 }
             } else {
                 Log::Warn("SMC checks skipped (smcnocheck)");
@@ -1324,9 +1354,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
         if (flashfs_sec) {
             for (const auto& entry : *flashfs_sec) {
-                const auto key_lower = normalize_file_key(entry.key);
+                const auto key_clean = sanitize_file_key(entry.key);
                 if (auto flashfs_file = load_flashfs_payload_file(entry.key)) {
-                    ensure_flashfs_payloads()[key_lower] = std::move(flashfs_file->second);
+                    ensure_flashfs_payloads()[key_clean] = std::move(flashfs_file->second);
                 }
             }
         }
@@ -1447,20 +1477,44 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                                   ce.header.header.version);
                     } else if (key_lower.starts_with("cf")) {
                         auto cf = BootloaderCf::parse(stage_data);
-                        if (!new_nand.patchslot_0) {
-                            new_nand.patchslot_0.emplace();
+                        bool is_slot1 = (new_nand.patchslot_0 && new_nand.patchslot_0->cf.has_value());
+                        auto& slot = is_slot1 ? new_nand.patchslot_1 : new_nand.patchslot_0;
+                        if (!slot) {
+                            slot.emplace();
                         }
-                        new_nand.patchslot_0->cf = std::move(stage_data);
-                        Log::Info("CF '{}' parsed successfully (v{})", entry.key,
-                                  cf.header.header.version);
+                        slot->cf = std::move(stage_data);
+                        Log::Info("CF ({}) '{}' parsed successfully (v{})", is_slot1 ? "slot 1" : "slot 0",
+                                  entry.key, cf.header.header.version);
                     } else if (key_lower.starts_with("cg")) {
                         auto cg = BootloaderCg::parse(stage_data);
-                        if (!new_nand.patchslot_0) {
-                            new_nand.patchslot_0.emplace();
+                        bool is_slot1 = (new_nand.patchslot_0 && new_nand.patchslot_0->cg.has_value());
+                        auto& slot = is_slot1 ? new_nand.patchslot_1 : new_nand.patchslot_0;
+                        if (!slot) {
+                            slot.emplace();
                         }
-                        new_nand.patchslot_0->cg = std::move(stage_data);
-                        Log::Info("CG '{}' parsed successfully (v{})", entry.key,
-                                  cg.header.header.version);
+
+                        std::string xexp_filename = is_slot1 ? "sysupdate.xexp2" : "sysupdate.xexp1";
+
+                        if (stage_data.size() > 0x10000) {
+                            Log::Info("CG ({}) size 0x{:x} exceeds 64KB (0x10000), splitting overflow into FlashFS '{}'...",
+                                      is_slot1 ? "slot 1" : "slot 0", stage_data.size(), xexp_filename);
+                            std::vector<uint8_t> cg_trimmed(stage_data.begin(), stage_data.begin() + 0x10000);
+                            slot->cg = std::move(cg_trimmed);
+
+                            if (!new_nand.flashfs_payloads) {
+                                new_nand.flashfs_payloads.emplace();
+                            }
+
+                            std::vector<uint8_t> xexp(stage_data.begin() + 0x10000, stage_data.end());
+                            (*new_nand.flashfs_payloads)[xexp_filename] = std::move(xexp);
+                            Log::Info("Staged '{}' in FlashFS (0x{:x} bytes)", xexp_filename,
+                                      (*new_nand.flashfs_payloads)[xexp_filename].size());
+                        } else {
+                            slot->cg = std::move(stage_data);
+                        }
+
+                        Log::Info("CG ({}) '{}' parsed successfully (v{})", is_slot1 ? "slot 1" : "slot 0",
+                                  entry.key, cg.header.header.version);
                     } else {
                         Log::Trace("Ignoring unhandled bootloader stage '{}'", entry.key);
                     }

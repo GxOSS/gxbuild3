@@ -373,13 +373,24 @@ namespace gxbuild3::bootloaders {
     }
 
     bool FlashFileSystem::add_file(std::string_view filename, FlashFileSystemEntry*& entry) {
-        // Check if file already exists
-        if (find_entry_internal(filename) != nullptr) {
-            Log::Error("add_file: file '{}' already exists", filename);
+        std::string_view clean_filename = filename;
+        auto pos = clean_filename.find_last_of("/\\");
+        if (pos != std::string_view::npos) {
+            clean_filename = clean_filename.substr(pos + 1);
+        }
+
+        if (clean_filename.empty()) {
+            Log::Error("add_file: empty filename after sanitization from '{}'", filename);
             return false;
         }
 
-        Log::Info("add_file: adding file '{}'...", filename);
+        // Check if file already exists
+        if (find_entry_internal(clean_filename) != nullptr) {
+            Log::Error("add_file: file '{}' already exists", clean_filename);
+            return false;
+        }
+
+        Log::Info("add_file: adding file '{}'...", clean_filename);
 
         // Create new entry
         m_entries.emplace_back();
@@ -387,8 +398,8 @@ namespace gxbuild3::bootloaders {
 
         // Initialize entry
         std::memset(new_entry.filename, 0, kMaxFilenameLength);
-        const size_t filename_len = std::min(filename.length(), kMaxFilenameLength - 1);
-        std::memcpy(new_entry.filename, filename.data(), filename_len);
+        const size_t filename_len = std::min(clean_filename.length(), kMaxFilenameLength - 1);
+        std::memcpy(new_entry.filename, clean_filename.data(), filename_len);
         new_entry.filename[filename_len] = '\0';
 
         // Allocate a block for the new entry
@@ -663,8 +674,13 @@ namespace gxbuild3::bootloaders {
     // Internal helpers
 
     FlashFileSystemEntry* FlashFileSystem::find_entry_internal(std::string_view filename) {
+        std::string_view clean_filename = filename;
+        auto pos = clean_filename.find_last_of("/\\");
+        if (pos != std::string_view::npos) {
+            clean_filename = clean_filename.substr(pos + 1);
+        }
         for (auto& entry : m_entries) {
-            if (entry.filename_matches(filename)) {
+            if (entry.filename_matches(clean_filename)) {
                 return &entry;
             }
         }
@@ -673,8 +689,13 @@ namespace gxbuild3::bootloaders {
 
     const FlashFileSystemEntry*
     FlashFileSystem::find_entry_internal(std::string_view filename) const {
+        std::string_view clean_filename = filename;
+        auto pos = clean_filename.find_last_of("/\\");
+        if (pos != std::string_view::npos) {
+            clean_filename = clean_filename.substr(pos + 1);
+        }
         for (const auto& entry : m_entries) {
-            if (entry.filename_matches(filename)) {
+            if (entry.filename_matches(clean_filename)) {
                 return &entry;
             }
         }

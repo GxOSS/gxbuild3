@@ -33,9 +33,17 @@ namespace gxbuild3::bootloaders {
         /// @brief Check if entry is valid (has a block number and length)
         bool is_valid() const noexcept { return block_number != 0 && length != 0; }
 
-        /// @brief Check if filename matches (case-sensitive)
+        /// @brief Check if filename matches (case-insensitive)
         bool filename_matches(std::string_view name) const noexcept {
-            return std::string_view(filename) == name;
+            std::string_view self{filename};
+            if (self.size() != name.size()) return false;
+            for (size_t i = 0; i < self.size(); ++i) {
+                if (std::tolower(static_cast<unsigned char>(self[i])) !=
+                    std::tolower(static_cast<unsigned char>(name[i]))) {
+                    return false;
+                }
+            }
+            return true;
         }
     };
 

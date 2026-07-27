@@ -132,7 +132,62 @@ typedef struct _flashfs_files_t {
     std::optional<std::vector<uint8_t>> secdata;
 } flashfs_files_t;
 
-using flashfs_payload_map_t = std::unordered_map<std::string, std::vector<uint8_t>>;
+struct flashfs_payload_map_t {
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> entries;
+
+    static bool iequals(std::string_view a, std::string_view b) noexcept {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                std::tolower(static_cast<unsigned char>(b[i]))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::vector<uint8_t>& operator[](const std::string& key) {
+        for (auto& [k, v] : entries) {
+            if (iequals(k, key)) {
+                return v;
+            }
+        }
+        entries.emplace_back(key, std::vector<uint8_t>{});
+        return entries.back().second;
+    }
+
+    bool contains(std::string_view key) const {
+        for (const auto& [k, v] : entries) {
+            if (iequals(k, key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    auto find(std::string_view key) {
+        return std::find_if(entries.begin(), entries.end(), [&](const auto& p) {
+            return iequals(p.first, key);
+        });
+    }
+
+    auto find(std::string_view key) const {
+        return std::find_if(entries.cbegin(), entries.cend(), [&](const auto& p) {
+            return iequals(p.first, key);
+        });
+    }
+
+    auto begin() { return entries.begin(); }
+    auto end() { return entries.end(); }
+    auto begin() const { return entries.begin(); }
+    auto end() const { return entries.end(); }
+    auto cbegin() const { return entries.cbegin(); }
+    auto cend() const { return entries.cend(); }
+
+    size_t size() const { return entries.size(); }
+    bool empty() const { return entries.empty(); }
+    void clear() { entries.clear(); }
+};
 
 struct FlashImage {
     gxbuild3::utils::FlashBlockDriver driver;
