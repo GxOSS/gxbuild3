@@ -971,6 +971,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
             }
             new_nand.keyvault = donor_nand->keyvault;
             new_nand.smc = donor_nand->smc;
+            new_nand.xconfig = donor_nand->xconfig;
         }
         if (auto smc_file = load_from_root(fw_dir, "smc.bin")) {
             new_nand.smc = std::move(smc_file->second);
@@ -978,6 +979,14 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                       donor_nand && donor_nand->smc ? " (overriding donor NAND)" : "");
         } else if (new_nand.smc) {
             Log::Info("Loaded SMC from donor NAND");
+        }
+
+        if (auto smc_cfg_file = load_from_root(fw_dir, "smc_config.bin")) {
+            new_nand.xconfig = std::move(smc_cfg_file->second);
+            Log::Info("Loaded SMC Config from '{}'{}", smc_cfg_file->first.string(),
+                      donor_nand && donor_nand->xconfig ? " (overriding donor NAND)" : "");
+        } else if (new_nand.xconfig) {
+            Log::Info("Loaded SMC Config from donor NAND");
         }
 
         if (!new_nand.smc) {
@@ -1059,12 +1068,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                               "-- pass smcnocheck=true to suppress",
                               smc_type_name(smc_type));
                 } else if (build_is_glitch && !smc_is_glitch) {
-                    const bool is_glitch1_or_2 = args.build_type &&
-                        (*args.build_type == BuildType::Glitch || *args.build_type == BuildType::Glitch2);
-
-                    if (is_glitch1_or_2 && smc_is_retail) {
+                    if (smc_is_retail) {
                         Log::Info("Retail SMC detected in {} mode, applying Glitch SMC patch...",
-                                  *args.build_type == BuildType::Glitch ? "glitch" : "glitch2");
+                                  describe_build_type(*args.build_type));
                         uint32_t patches_applied = Signature::ApplyPatch(
                             smc.data(), static_cast<uint32_t>(smc.size()), Glitch.addr, Glitch.value);
                         if (patches_applied > 0) {

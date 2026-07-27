@@ -120,27 +120,30 @@ namespace {
         return "unknown";
     }
 
-    const char* describe_build_type(BuildType build_type) {
-        switch (build_type) {
-            case BuildType::Retail:
-                return "retail";
-            case BuildType::Glitch:
-                return "glitch";
-            case BuildType::Jtag:
-                return "jtag";
-            case BuildType::Glitch2:
-                return "glitch2";
-            case BuildType::Glitch2m:
-                return "glitch2m";
-            case BuildType::Glitch3:
-                return "glitch3";
-            case BuildType::Devkit:
-                return "devkit";
-                // case BuildType::DevGL: return "devgl";
-        }
+} // namespace
 
-        return "unknown";
+const char* describe_build_type(BuildType build_type) {
+    switch (build_type) {
+        case BuildType::Retail:
+            return "retail";
+        case BuildType::Glitch:
+            return "glitch";
+        case BuildType::Jtag:
+            return "jtag";
+        case BuildType::Glitch2:
+            return "glitch2";
+        case BuildType::Glitch2m:
+            return "glitch2m";
+        case BuildType::Glitch3:
+            return "glitch3";
+        case BuildType::Devkit:
+            return "devkit";
     }
+
+    return "unknown";
+}
+
+namespace {
 
     std::optional<SyntheticNandTarget>
     resolve_synthetic_target(std::optional<ConsoleType> console_type, BuildType build_type) {
@@ -339,6 +342,20 @@ namespace {
         }
 
         const uint32_t header_offset = bswap32(image.header.smc_offset);
+        if (header_offset != 0 && header_offset != 0xFFFFFFFFU) {
+            return header_offset;
+        }
+
+        return std::nullopt;
+    }
+
+    std::optional<uint32_t> resolve_build_smc_config_offset(const flash_image_t& image) {
+        if (image.nand_results && image.nand_results->smc_config_offset != 0 &&
+            image.nand_results->smc_config_offset != 0xFFFFFFFFU) {
+            return image.nand_results->smc_config_offset;
+        }
+
+        const uint32_t header_offset = bswap32(image.header.smc_config_offset);
         if (header_offset != 0 && header_offset != 0xFFFFFFFFU) {
             return header_offset;
         }
@@ -823,6 +840,7 @@ std::optional<build_layout_t> resolve_build_layout(const flash_image_t& image,
                                                    BuildType build_type) {
     build_layout_t layout{};
     layout.smc_offset = resolve_build_smc_offset(image);
+    layout.smc_config_offset = resolve_build_smc_config_offset(image);
     layout.kv_offset = resolve_build_kv_offset(image);
     layout.bootloader_chain_offset = resolve_build_bootloader_chain_offset(image);
     layout.patchslot_base = resolve_build_patchslot_base(image);
@@ -1035,11 +1053,22 @@ namespace {
 
         std::optional<std::vector<uint8_t>> encrypted_smc;
         if (image.smc) {
-            encrypted_smc = smc_encrypt(*image.smc);
-            Log::Info("build: SMC re-encrypted for output ({} bytes)", encrypted_smc->size());
+            if (!smc_is_encrypted(*image.smc)) {
+                encrypted_smc = smc_encrypt(*image.smc);
+                Log::Info("build: SMC re-encrypted for output ({} bytes)", encrypted_smc->size());
+            } else {
+                encrypted_smc = *image.smc;
+                Log::Info("build: SMC already encrypted for output ({} bytes)", encrypted_smc->size());
+            }
         }
         if (!write_optional_blob(image.driver, encrypted_smc, layout->smc_offset, "SMC")) {
             return false;
+        }
+
+        if (image.xconfig) {
+            if (!write_optional_blob(image.driver, image.xconfig, layout->smc_config_offset, "SMC Config")) {
+                return false;
+            }
         }
 
         if (image.keyvault) {
@@ -1735,7 +1764,7 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
     }
 
     if (cf_slot0) {
-        std::memcpy(cg_hmac, cf_slot0->header.cg_hmac, 16);
+        std::memcpy(cg_hmac, cf_slot0->header.mac, 16);
     }
 
     if (results.cg0) {
@@ -1765,7 +1794,7 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
             Log::Info("Extracted 6BL/CF Slot 1: {} (v{})", filename, cf.header.header.version);
 
             if (cf.is_decrypted())
-                std::memcpy(cg_hmac, cf.header.cg_hmac, 16);
+                std::memcpy(cg_hmac, cf.header.mac, 16);
         }
     }
 
@@ -2008,9 +2037,15 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
                                       is_slot1 ? "slot 1" : "slot 0", chain->size(), filename, total_cg_size);
                         }
 
-                        // Re-write updated CF to NAND image driver
+                        // Re-write updated encrypted CF to NAND image driver
                         if (patchslot_offset != 0) {
-                            built.driver.write(patchslot_offset, cf_bytes.data(), cf_bytes.size());
+                            auto cf_enc = cf_bytes;
+                            if (cf_enc.size() >= 0x30) {
+                                uint8_t derived_key[16];
+                                ExCryptHmacSha(key_1bl, 16, cf_enc.data() + 0x20, 16, nullptr, 0, nullptr, 0, derived_key, 16);
+                                ExCryptRc4(derived_key, 16, cf_enc.data() + 0x30, static_cast<uint32_t>(cf_enc.size() - 0x30));
+                            }
+                            built.driver.write(patchslot_offset, cf_enc.data(), cf_enc.size());
                         }
                     }
                 }

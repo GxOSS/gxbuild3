@@ -2,10 +2,10 @@
 
 #include "excrypt.h"
 
-#include <stdbool.h>
-#include <stdint.h>
 #include <array>
 #include <optional>
+#include <stdbool.h>
+#include <stdint.h>
 #include <vector>
 
 // NOTE: This file is derived from InvoxiPlayGames's xenon-bltool.
@@ -13,7 +13,7 @@
 // it should fall under fair use / technical info and not violate the GPL license.
 // If i am wrong then open a github issue or contact me at
 // EMAIL: exposuremg@protonmail.com
-// DISCORD: e3xp0
+// DISCORD: xenon_kitchen
 
 // Big thanks to invoxiplaygames <3
 
@@ -44,6 +44,8 @@ inline constexpr uint8_t rsa_1bl[0x110] = {
     0xF4, 0x0F, 0x63, 0x05, 0x3F, 0x1A, 0xED, 0xED, 0x4B, 0xEE, 0xFD, 0x6D, 0x74, 0xE6, 0xA5, 0x92,
     0xA7, 0x99, 0x81, 0x73, 0x95, 0xD8, 0xC7, 0xA5, 0xA1, 0xC7, 0x7B, 0x09, 0x05, 0x85, 0x41, 0x04};
 
+#pragma pack(push, 1)
+
 typedef struct _bl_header {
     uint16_t magic;
     uint16_t version;
@@ -56,6 +58,7 @@ typedef struct _bl_header {
 typedef struct _nand_header {
     bl_header header;
     uint8_t copyright[0x40];
+    uint8_t reserved[0x10];
     uint32_t kv_size;
     uint32_t cf_offset;
     uint16_t patch_slots;
@@ -79,7 +82,7 @@ typedef struct _bl2_header {
     bl_header header;
     uint8_t key[0x10]; // Per Box Digest?
     uint64_t padding_or_args[4];
-    EXCRYPT_SIG signature; 
+    EXCRYPT_SIG signature;
     uint8_t globals[0x128]; // "find out whats in here"
     EXCRYPT_RSAPUB_2048 devkit_pubkey; // RSA Pub Key
     uint8_t sc_key[0x10]; // nonce_3bl
@@ -100,7 +103,6 @@ typedef struct _bl2_metadata {
     std::optional<uint64_t> soc_mmio_addr;
 } bl2_metadata;
 
-
 typedef struct _bl2_header {
     bl_header header;
     uint8_t per_box_digest[0x10];
@@ -116,14 +118,13 @@ typedef struct _bl2_header {
     uint8_t reserved_per_box[0xC];
 } bl2_header;
 
-
 typedef generic_header bl3_header;
 
 /*
 typedef struct _bl4_header {
     bl_header header;
     uint8_t key[0x10];
-    EXCRYPT_SIG signature;  
+    EXCRYPT_SIG signature;
     uint8_t idk_yet[0x120]; // unused?
     char cf_salt[10];
     uint16_t unused2;
@@ -134,7 +135,7 @@ typedef struct _bl4_header {
 typedef struct _bl4_header {
     bl_header header;
     uint8_t rsa_pub_key[0x10];
-    EXCRYPT_SIG signature; // only valid on devkits
+    EXCRYPT_SIG signature;   // only valid on devkits
     uint8_t nonce_6bl[0x10]; // Not listed in bltool?
     char salt_6bl[10];
     uint8_t digest_5bl[0x14];
@@ -157,17 +158,23 @@ typedef struct _bl6_header {
     uint32_t unknown;      // think this is unused
     uint32_t cg_size;
     uint8_t key[0x10];
-    uint8_t pairing[0x200];
+    uint16_t cg_block_count;
+    uint16_t cg_blocks[223];
+    uint8_t reserved1[0x2B];
+    uint8_t update_slot;
+    uint8_t pairing_data[3];
+    uint8_t lockdown_value;
+    uint8_t mac[0x10];
 
     EXCRYPT_SIG signature;
-    uint8_t cg_hmac[0x10];
+    uint8_t cg_key[0x10];
     uint8_t cg_hash[0x14];
 } bl6_header;
 
 struct CfMetadata {
     // Plain - Offset 0x0 in payload / 0x10 Absolute
-    uint16_t source_version; // base_ver
-    uint16_t target_version; // target_ver
+    uint16_t source_version;  // base_ver
+    uint16_t target_version;  // target_ver
     uint32_t reserved_prefix; // bltool - "Unknown" ?
     uint32_t cg_size;
     uint8_t hmac_salt[16];
@@ -178,7 +185,7 @@ struct CfMetadataDecrypted {
     uint16_t cg_blocks_used;
     std::vector<uint16_t> cg_block_numbers; // 223 entries
     EXCRYPT_SIG signature;
-    uint8_t cg_nonce[0x10]; // cg_hmac
+    uint8_t cg_nonce[0x10];  // cg_hmac
     uint8_t cg_digest[0x14]; // cg_hash
 
     // PerBoxData
@@ -197,6 +204,8 @@ typedef struct _7bl_header {
     uint32_t new_size;
     uint8_t new_hash[0x14];
 } bl7_header;
+
+#pragma pack(pop)
 
 typedef enum _bl_type {
     CB = 0x342,

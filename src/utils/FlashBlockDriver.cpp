@@ -71,8 +71,13 @@ namespace gxbuild3::utils {
 
         switch (m_spare_type) {
             case SpareType::OldSmallBlock:
-            case SpareType::SmallBlock:
                 spare_buff[0x2] = seq0;
+                spare_buff[0x3] = seq1;
+                spare_buff[0x4] = seq2;
+                spare_buff[0x6] = seq3;
+                break;
+            case SpareType::SmallBlock:
+                spare_buff[0x0] = seq0;
                 spare_buff[0x3] = seq1;
                 spare_buff[0x4] = seq2;
                 spare_buff[0x6] = seq3;
@@ -85,8 +90,9 @@ namespace gxbuild3::utils {
                 break;
             case SpareType::BigBlock:
                 spare_buff[0x5] = seq0;
-                spare_buff[0x4] = seq1;
-                spare_buff[0x3] = seq2;
+                spare_buff[0x3] = seq1;
+                spare_buff[0x4] = seq2;
+                spare_buff[0x6] = seq3;
                 break;
             case SpareType::Corona4GB:
                 break;
@@ -95,19 +101,22 @@ namespace gxbuild3::utils {
 
     void FlashBlockDriver::set_spare_index_field(uint8_t* spare_buff, uint16_t blk_index) const {
         const uint8_t idx1 = static_cast<uint8_t>(blk_index & 0xFF);
-        const uint8_t idx0 = static_cast<uint8_t>((blk_index >> 8) & 0xFF);
+        const uint8_t idx0 = static_cast<uint8_t>((blk_index >> 8) & 0xF);
 
         switch (m_spare_type) {
             case SpareType::OldSmallBlock:
+                spare_buff[0x0] = idx1;
+                spare_buff[0x1] = (spare_buff[0x1] & 0xF0) | idx0;
+                break;
             case SpareType::SmallBlock:
                 spare_buff[0x1] = idx1;
-                spare_buff[0x0] = idx0;
+                spare_buff[0x2] = (spare_buff[0x2] & 0xF0) | idx0;
                 break;
             case SpareType::BigBlockOnSmall:
             case SpareType::BigBlock:
             case SpareType::Corona4GB:
-                spare_buff[0x2] = idx1;
-                spare_buff[0x1] = idx0;
+                spare_buff[0x1] = idx1;
+                spare_buff[0x2] = (spare_buff[0x2] & 0xF0) | idx0;
                 break;
         }
     }
@@ -123,12 +132,12 @@ namespace gxbuild3::utils {
 
         switch (m_spare_type) {
             case SpareType::OldSmallBlock:
-                idx0 = spare_buff[0x1];
+                idx0 = spare_buff[0x1] & 0xF;
                 idx1 = spare_buff[0x0];
                 break;
             case SpareType::SmallBlock:
-                idx0 = spare_buff[0x1] & 0xF;
-                idx1 = spare_buff[0x0];
+                idx0 = spare_buff[0x2] & 0xF;
+                idx1 = spare_buff[0x1];
                 break;
             case SpareType::BigBlockOnSmall:
             case SpareType::BigBlock:
@@ -158,8 +167,13 @@ namespace gxbuild3::utils {
 
         switch (m_spare_type) {
             case SpareType::OldSmallBlock:
-            case SpareType::SmallBlock:
                 seq0 = spare_buff[0x2];
+                seq1 = spare_buff[0x3];
+                seq2 = spare_buff[0x4];
+                seq3 = spare_buff[0x6];
+                break;
+            case SpareType::SmallBlock:
+                seq0 = spare_buff[0x0];
                 seq1 = spare_buff[0x3];
                 seq2 = spare_buff[0x4];
                 seq3 = spare_buff[0x6];
@@ -172,8 +186,9 @@ namespace gxbuild3::utils {
                 break;
             case SpareType::BigBlock:
                 seq0 = spare_buff[0x5];
-                seq1 = spare_buff[0x4];
-                seq2 = spare_buff[0x3];
+                seq1 = spare_buff[0x3];
+                seq2 = spare_buff[0x4];
+                seq3 = spare_buff[0x6];
                 break;
             case SpareType::Corona4GB:
                 break;
@@ -475,14 +490,13 @@ namespace gxbuild3::utils {
         const uint8_t* spare = m_image_data.data() + 0x4400;
 
         // Check for old SFC small block layout (META_TYPE_0)
-        uint16_t block_idx = static_cast<uint16_t>((static_cast<uint16_t>(spare[0x1]) << 8) |
-                                                   static_cast<uint16_t>(spare[0x0]));
+        uint16_t block_idx = static_cast<uint16_t>(((spare[0x1] & 0xF) << 8) | spare[0x0]);
         if (block_idx == 1 && spare[0x5] == 0xFF) {
             return SpareType::OldSmallBlock;
         }
 
-        // Check for small block layout
-        block_idx = static_cast<uint16_t>(((spare[0x1] & 0xF) << 8) | spare[0x0]);
+        // Check for small block layout (META_TYPE_1)
+        block_idx = static_cast<uint16_t>(((spare[0x2] & 0xF) << 8) | spare[0x1]);
         if (block_idx == 1 && spare[0x5] == 0xFF) {
             return SpareType::SmallBlock;
         }

@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <vector>
 
+#pragma pack(push, 1)
+
 typedef struct _KV_CONTROLLER_DATA {
     uint32_t dwKey1Idx;
     uint32_t dwKey2Idx;
@@ -100,27 +102,6 @@ typedef struct _XE_KEYVAULT_DATA {
     uint8_t b38CardeaCertificate[0x2108];          // 0x1EF8
 } XE_KEYVAULT_DATA, *PXE_KEYVAULT_DATA;
 
-class CXeKeyVault {
-  public:
-    XE_KEYVAULT_DATA xeData;
-    uint8_t* pbCPUKey;
-    uint8_t bRc4Key[0x10];
-    uint8_t* pbHmacShaNonce;
-    uint16_t* pwKeyVaultVersion; // pointer to KeyVaultVersion field in flash header
-    bool bIsDecrypted;
-
-    [[nodiscard]] int RandomizeKeys();
-    [[nodiscard]] int RepairDesKeys();
-    [[nodiscard]] int Crypt(bool isDecrypting);
-    [[nodiscard]] int Load(bool isEncrypted);
-    [[nodiscard]] int Save(bool saveEncrypted);
-    [[nodiscard]] int CalculateNonce(uint8_t* pbNonceBuff, uint32_t cbNonceBuff);
-    CXeKeyVault() {
-        pbCPUKey = 0;
-        pbHmacShaNonce = 0;
-    };
-};
-
 typedef struct _XE_FCRT_DATA {
     uint8_t bSignature[0x100];
     // signature is made from hmac sha of next 0x40 bytes
@@ -183,6 +164,29 @@ typedef struct _XE_DAE_DATA {
     uint8_t WhateverMan[0x4000];
 } XE_DAE_DATA, *PXE_DAE_DATA;
 
+#pragma pack(pop)
+
+class CXeKeyVault {
+  public:
+    XE_KEYVAULT_DATA xeData;
+    uint8_t* pbCPUKey;
+    uint8_t bRc4Key[0x10];
+    uint8_t* pbHmacShaNonce;
+    uint16_t* pwKeyVaultVersion; // pointer to KeyVaultVersion field in flash header
+    bool bIsDecrypted;
+
+    [[nodiscard]] int RandomizeKeys();
+    [[nodiscard]] int RepairDesKeys();
+    [[nodiscard]] int Crypt(bool isDecrypting);
+    [[nodiscard]] int Load(bool isEncrypted);
+    [[nodiscard]] int Save(bool saveEncrypted);
+    [[nodiscard]] int CalculateNonce(uint8_t* pbNonceBuff, uint32_t cbNonceBuff);
+    CXeKeyVault() {
+        pbCPUKey = 0;
+        pbHmacShaNonce = 0;
+    };
+};
+
 class CXeFlashSecuredFiles {
   public:
     XE_FCRT_DATA xeFcrtData;
@@ -195,8 +199,10 @@ class CXeFlashSecuredFiles {
 
 bool cpukey_valid(const std::vector<uint8_t>& cpu_key);
 std::vector<uint8_t> keyvault_decrypt(const std::vector<uint8_t>& cpu_key,
-                                      const std::vector<uint8_t>& data);
+                                      const std::vector<uint8_t>& data,
+                                      uint16_t kv_version = 0x0712);
 std::vector<uint8_t> keyvault_encrypt(const std::vector<uint8_t>& cpu_key,
-                                      const std::vector<uint8_t>& data);
+                                      const std::vector<uint8_t>& data,
+                                      uint16_t kv_version = 0x0712);
 bool keyvault_verify(const std::vector<uint8_t>& cpu_key, const std::vector<uint8_t>& data,
                      const std::vector<uint8_t>& pub_key);

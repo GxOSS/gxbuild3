@@ -228,6 +228,7 @@ typedef struct FlashImageMetadata {
 
 typedef struct BuildLayout {
     std::optional<uint32_t> smc_offset;
+    std::optional<uint32_t> smc_config_offset;
     std::optional<uint32_t> kv_offset;
     std::optional<uint32_t> bootloader_chain_offset;
     std::optional<uint32_t> payload_offset;
@@ -259,6 +260,8 @@ flash_image_t parse(const std::vector<uint8_t>& data);
 // bool encrypt_all(const flash_image_t& flash, const std::vector<uint8_t>& cpu_key);
 
 bool extract_all(const flash_image_t& flash, const std::filesystem::path& output_dir, const std::vector<uint8_t>& cpu_key_bytes, const std::vector<uint8_t>& bl_key_bytes);
+
+const char* describe_build_type(BuildType build_type);
 
 std::optional<build_layout_t> resolve_build_layout(const flash_image_t& image, BuildType build_type);
 

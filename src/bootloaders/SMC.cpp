@@ -36,14 +36,17 @@ std::vector<uint8_t> smc_encrypt(const std::vector<uint8_t>& data) {
     return encrypted;
 }
 
-// credit to c0z
 bool smc_is_encrypted(const std::vector<uint8_t>& data) {
     if (data.size() <= 0x100) {
         return false;  // too small to be a valid SMC
     }
+    const uint8_t raw_nibble = (data[0x100] >> 4) & 0xF;
+    if (raw_nibble >= 1 && raw_nibble <= 7) {
+        return false;  // Already plaintext
+    }
     const auto decrypted = smc_decrypt(data);
-    const uint8_t type_nibble = (decrypted[0x100] >> 4) & 0xF;
-    return type_nibble >= 1 && type_nibble <= 7;
+    const uint8_t dec_nibble = (decrypted[0x100] >> 4) & 0xF;
+    return dec_nibble >= 1 && dec_nibble <= 7;
 }
 
 std::string_view smc_type_name(SmcType type) {

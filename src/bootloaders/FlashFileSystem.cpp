@@ -122,8 +122,14 @@ namespace gxbuild3::bootloaders {
                 continue;
             }
 
-            // Allocate the first block and return it
-            m_blockmap[i] = 0x1fff; // Mark as allocated
+            // Allocate all blocks in the contiguous chain
+            for (uint16_t x = 0; x < blocks_needed; x++) {
+                if (x + 1 < blocks_needed) {
+                    m_blockmap[i + x] = static_cast<uint16_t>(i + x + 1);
+                } else {
+                    m_blockmap[i + x] = 0x1fff; // Mark tail as end of chain
+                }
+            }
             return {true, static_cast<uint16_t>(i)};
         }
 
@@ -194,7 +200,7 @@ namespace gxbuild3::bootloaders {
             }
 
             block = static_cast<uint16_t>(m_blockmap[block] & 0x7fff);
-            if ((block & 0x1ffe) == 0x1ffe || num == static_cast<int>(max_length)) {
+            if (block >= 0x1ffb || num == static_cast<int>(max_length)) {
                 break;
             }
             num++;
@@ -217,7 +223,7 @@ namespace gxbuild3::bootloaders {
                 return std::nullopt;
             }
             block = static_cast<uint16_t>(m_blockmap[block] & 0x7fff);
-            if ((block & 0x1ffe) == 0x1ffe || i + 1 >= num) {
+            if (block >= 0x1ffb || i + 1 >= num) {
                 break;
             }
         }

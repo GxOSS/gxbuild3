@@ -79,7 +79,8 @@ void ExCryptRandom(uint8_t* dest, size_t size) {
 }
 
 std::vector<uint8_t> keyvault_decrypt(const std::vector<uint8_t>& cpu_key,
-                                      const std::vector<uint8_t>& data) {
+                                      const std::vector<uint8_t>& data,
+                                      uint16_t kv_version) {
     if (!cpukey_valid(cpu_key)) {
         throw std::runtime_error("Invalid CPU key");
     }
@@ -98,7 +99,8 @@ std::vector<uint8_t> keyvault_decrypt(const std::vector<uint8_t>& cpu_key,
                    static_cast<uint32_t>(out_data.size() - 0x10));
     }
 
-    const uint8_t version[2] = {0x07, 0x12};
+    const uint8_t version[2] = {static_cast<uint8_t>((kv_version >> 8) & 0xFF),
+                                static_cast<uint8_t>(kv_version & 0xFF)};
     uint8_t kv_hash2[20];
     ExCryptHmacSha(cpu_key.data(), static_cast<uint32_t>(cpu_key.size()), out_data.data() + 0x10,
                    static_cast<uint32_t>(out_data.size() - 0x10), version, 2, nullptr, 0, kv_hash2,
@@ -112,7 +114,8 @@ std::vector<uint8_t> keyvault_decrypt(const std::vector<uint8_t>& cpu_key,
 }
 
 std::vector<uint8_t> keyvault_encrypt(const std::vector<uint8_t>& cpu_key,
-                                      const std::vector<uint8_t>& data) {
+                                      const std::vector<uint8_t>& data,
+                                      uint16_t kv_version) {
     if (!cpukey_valid(cpu_key)) {
         throw std::runtime_error("Invalid CPU key");
     }
@@ -125,7 +128,8 @@ std::vector<uint8_t> keyvault_encrypt(const std::vector<uint8_t>& cpu_key,
     ExCryptRandom(out_data.data(), 8);
     ExCryptRandom(out_data.data() + 0x10, 8);
 
-    const uint8_t version[2] = {0x07, 0x12};
+    const uint8_t version[2] = {static_cast<uint8_t>((kv_version >> 8) & 0xFF),
+                                static_cast<uint8_t>(kv_version & 0xFF)};
     uint8_t kv_hash[20];
     ExCryptHmacSha(cpu_key.data(), static_cast<uint32_t>(cpu_key.size()), out_data.data() + 0x10,
                    static_cast<uint32_t>(out_data.size() - 0x10), version, 2, nullptr, 0, kv_hash,
