@@ -198,6 +198,7 @@ class CXeFlashSecuredFiles {
 };
 
 bool cpukey_valid(const std::vector<uint8_t>& cpu_key);
+void ExCryptRandom(uint8_t* dest, size_t size);
 std::vector<uint8_t> keyvault_decrypt(const std::vector<uint8_t>& cpu_key,
                                       const std::vector<uint8_t>& data,
                                       uint16_t kv_version = 0x0712);

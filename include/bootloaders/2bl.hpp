@@ -24,6 +24,16 @@ class BootloaderCb {
                     const uint8_t cpu_key[16]);
     void decrypt_mfg(const uint8_t cb_a_key[16]);
 
+    void encrypt(const uint8_t onebl_key[16]) { decrypt(onebl_key); }
+    void encrypt_v1(const uint8_t cb_a_key[16], const uint8_t cpu_key[16]) {
+        decrypt_v1(cb_a_key, cpu_key);
+    }
+    void encrypt_v2(const bl2_header& cb_a_hdr, const uint8_t cb_a_key[16],
+                    const uint8_t cpu_key[16]) {
+        decrypt_v2(cb_a_hdr, cb_a_key, cpu_key);
+    }
+    void encrypt_mfg(const uint8_t cb_a_key[16]) { decrypt_mfg(cb_a_key); }
+
     bool is_decrypted() const;
     bool verify_decrypted() const;
     void populate_metadata();

@@ -1369,6 +1369,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
         std::array<uint8_t, 16> cb_key{};
         std::array<uint8_t, 16> cb_b_key{};
+        std::array<uint8_t, 16> cd_key{};
         std::optional<bl2_header> cb_a_header;
 
         // main bootloader section
@@ -1393,12 +1394,20 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                     if (key_lower.starts_with("cba") || key_lower.starts_with("cb_") ||
                         key_lower.starts_with("sb_")) {
                         auto cb = BootloaderCb::parse(stage_data);
-                        if (bl_key_bytes.size() == 16) {
+                        if (!cb.is_decrypted() && bl_key_bytes.size() == 16) {
                             cb.decrypt(bl_key_bytes.data());
                         }
                         auto cb_bytes = cb.serialize();
                         if (cb.is_decrypted()) {
                             cb_a_header = cb.header;
+                            if (!cb.derived_key && bl_key_bytes.size() == 16 && cb_bytes.size() >= 0x20) {
+                                uint8_t digest[20];
+                                ExCryptHmacSha(bl_key_bytes.data(), 16, cb_bytes.data() + 0x10, 0x10,
+                                               nullptr, 0, nullptr, 0, digest, 20);
+                                std::array<uint8_t, 16> k;
+                                std::memcpy(k.data(), digest, 16);
+                                cb.derived_key = k;
+                            }
                             if (cb.derived_key) {
                                 cb_key = *cb.derived_key;
                             }
@@ -1406,8 +1415,16 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                                                             "CB")) {
                                 return 1;
                             }
-                            new_nand.cb_or_A = std::move(cb_bytes);
-                            Log::Info("CB '{}' parsed successfully (v{})", entry.key,
+                            auto cb_to_encrypt = BootloaderCb::parse(cb_bytes);
+                            if (cb_bytes.size() >= sizeof(bl_header)) {
+                                cb_to_encrypt.header.header.size =
+                                    static_cast<uint32_t>(cb_bytes.size());
+                            }
+                            if (cb_to_encrypt.is_decrypted() && bl_key_bytes.size() == 16) {
+                                cb_to_encrypt.encrypt(bl_key_bytes.data());
+                            }
+                            new_nand.cb_or_A = cb_to_encrypt.serialize();
+                            Log::Info("CB '{}' parsed and re-encrypted successfully (v{})", entry.key,
                                       cb.header.header.version);
                         } else {
                             new_nand.cb_or_A = std::move(stage_data);
@@ -1415,7 +1432,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                         }
                     } else if (key_lower.starts_with("cbx")) {
                         auto cbx = BootloaderCb::parse(stage_data);
-                        if (bl_key_bytes.size() == 16) {
+                        if (!cbx.is_decrypted() && bl_key_bytes.size() == 16) {
                             cbx.decrypt(bl_key_bytes.data());
                         }
                         new_nand.cb_X = std::move(stage_data);
@@ -1427,12 +1444,28 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                         }
                     } else if (key_lower.starts_with("cbb")) {
                         auto cbb = BootloaderCb::parse(stage_data);
-                        if (cb_a_header && has_any_key_bytes(cb_key) &&
+                        bool used_v2 = false;
+                        if (!cbb.is_decrypted() && has_any_key_bytes(cb_key) &&
                             cpu_key_bytes.size() == 16) {
-                            cbb.decrypt_v2(*cb_a_header, cb_key.data(), cpu_key_bytes.data());
+                            cbb.decrypt_v1(cb_key.data(), cpu_key_bytes.data());
+                            if (!cbb.is_decrypted() && cb_a_header) {
+                                cbb.decrypt_v2(*cb_a_header, cb_key.data(), cpu_key_bytes.data());
+                                if (cbb.is_decrypted()) {
+                                    used_v2 = true;
+                                }
+                            }
                         }
                         auto cbb_bytes = cbb.serialize();
                         if (cbb.is_decrypted()) {
+                            if (!cbb.derived_key && has_any_key_bytes(cb_key) &&
+                                cpu_key_bytes.size() == 16 && cbb_bytes.size() >= 0x20) {
+                                uint8_t digest[20];
+                                ExCryptHmacSha(cb_key.data(), 16, cbb_bytes.data() + 0x10, 16,
+                                               cpu_key_bytes.data(), 16, nullptr, 0, digest, 20);
+                                std::array<uint8_t, 16> k;
+                                std::memcpy(k.data(), digest, 16);
+                                cbb.derived_key = k;
+                            }
                             if (cbb.derived_key) {
                                 cb_b_key = *cbb.derived_key;
                             }
@@ -1440,8 +1473,22 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                                                             "CB_B")) {
                                 return 1;
                             }
-                            new_nand.cb_B = std::move(cbb_bytes);
-                            Log::Info("CBB '{}' parsed successfully (v{})", entry.key,
+                            auto cbb_to_encrypt = BootloaderCb::parse(cbb_bytes);
+                            if (cbb_bytes.size() >= sizeof(bl_header)) {
+                                cbb_to_encrypt.header.header.size =
+                                    static_cast<uint32_t>(cbb_bytes.size());
+                            }
+                            if (cbb_to_encrypt.is_decrypted() && has_any_key_bytes(cb_key) &&
+                                cpu_key_bytes.size() == 16) {
+                                if (used_v2 && cb_a_header) {
+                                    cbb_to_encrypt.encrypt_v2(*cb_a_header, cb_key.data(),
+                                                             cpu_key_bytes.data());
+                                } else {
+                                    cbb_to_encrypt.encrypt_v1(cb_key.data(), cpu_key_bytes.data());
+                                }
+                            }
+                            new_nand.cb_B = cbb_to_encrypt.serialize();
+                            Log::Info("CBB '{}' parsed and re-encrypted successfully (v{})", entry.key,
                                       cbb.header.header.version);
                         } else {
                             new_nand.cb_B = std::move(stage_data);
@@ -1458,7 +1505,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                             has_any_key_bytes(cb_b_key)
                                 ? cb_b_key.data()
                                 : (has_any_key_bytes(cb_key) ? cb_key.data() : nullptr);
-                        if (active_cb_key) {
+                        if (!cd.is_decrypted() && active_cb_key) {
                             cd.decrypt(active_cb_key);
                         }
 
@@ -1468,18 +1515,40 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                                                             "CD")) {
                                 return 1;
                             }
-                            new_nand.cd = std::move(cd_bytes);
-                            Log::Info("CD '{}' parsed successfully (v{})", entry.key,
-                                      cd.header.header.version);
+                            auto patched_cd = BootloaderCd::parse(cd_bytes);
+                            patched_cd.decrypted = true;
+                            if (active_cb_key) {
+                                patched_cd.encrypt(active_cb_key);
+
+                                uint8_t digest[20];
+                                ExCryptHmacSha(active_cb_key, 16, patched_cd.header.rsa_pub_key, 16,
+                                               nullptr, 0, nullptr, 0, digest, 20);
+                                std::memcpy(cd_key.data(), digest, 16);
+
+                                new_nand.cd = patched_cd.serialize();
+                                Log::Info("CD '{}' parsed, patched, and re-encrypted successfully (v{})", entry.key,
+                                          cd.header.header.version);
+                            } else {
+                                new_nand.cd = std::move(cd_bytes);
+                                Log::Info("CD '{}' parsed and patched successfully (v{})", entry.key,
+                                          cd.header.header.version);
+                            }
                         } else {
                             new_nand.cd = std::move(stage_data);
                             Log::Warn("CD '{}' parsed but is not decrypted", entry.key);
                         }
                     } else if (key_lower.starts_with("ce")) {
                         auto ce = BootloaderCe::parse(stage_data);
-                        new_nand.ce = std::move(stage_data);
-                        Log::Info("CE '{}' parsed successfully (v{})", entry.key,
-                                  ce.header.header.version);
+                        if (ce.is_decrypted() && has_any_key_bytes(cd_key)) {
+                            ce.encrypt(cd_key.data());
+                            new_nand.ce = ce.serialize();
+                            Log::Info("CE '{}' parsed and re-encrypted successfully (v{})", entry.key,
+                                      ce.header.header.version);
+                        } else {
+                            new_nand.ce = std::move(stage_data);
+                            Log::Info("CE '{}' parsed successfully (v{})", entry.key,
+                                      ce.header.header.version);
+                        }
                     } else if (key_lower.starts_with("cf")) {
                         auto cf = BootloaderCf::parse(stage_data);
                         bool is_slot1 = (new_nand.patchslot_0 && new_nand.patchslot_0->cf.has_value());

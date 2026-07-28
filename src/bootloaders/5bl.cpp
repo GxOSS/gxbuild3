@@ -1,4 +1,5 @@
 #include "bootloaders/5bl.hpp"
+#include "bootloaders/Keyvault.hpp"
 #include "Utils.hpp"
 #include <cstring>
 #include <stdexcept>
@@ -22,11 +23,16 @@ BootloaderCe BootloaderCe::parse(const std::vector<uint8_t>& bytes) {
 }
 
 void BootloaderCe::decrypt(const uint8_t cd_key[16]) {
+    if (decrypted) return;
     uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
-    size_t payload_len = size_aligned - sizeof(bl_header);
+    size_t required_data_size = size_aligned - sizeof(bl5_header);
     
-    if (data.size() + sizeof(bl5_header) - sizeof(bl_header) < payload_len)
+    if (data.size() + sizeof(bl5_header) < header.header.size)
         throw std::runtime_error("CE/5BL payload too short");
+
+    if (data.size() < required_data_size) {
+        data.resize(required_data_size, 0x00);
+    }
     
     uint8_t derived_key[16];
     ExCryptHmacSha(cd_key, 16, header.key, 16, nullptr, 0, nullptr, 0, derived_key, 16);
@@ -42,6 +48,37 @@ void BootloaderCe::decrypt(const uint8_t cd_key[16]) {
     std::copy(temp.begin() + (sizeof(bl5_header) - 0x20), temp.begin() + (sizeof(bl5_header) - 0x20) + data.size(), data.begin());
     
     decrypted = true;
+}
+
+void BootloaderCe::encrypt(const uint8_t cd_key[16]) {
+    if (!decrypted) return;
+    uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
+    size_t required_data_size = size_aligned - sizeof(bl5_header);
+    if (data.size() < required_data_size) {
+        data.resize(required_data_size, 0x00);
+    }
+
+    bool is_zero = true;
+    for (size_t i = 0; i < 16; ++i) {
+        if (header.key[i] != 0) { is_zero = false; break; }
+    }
+    if (is_zero) {
+        ExCryptRandom(header.key, 16);
+    }
+
+    uint8_t derived_key[16];
+    ExCryptHmacSha(cd_key, 16, header.key, 16, nullptr, 0, nullptr, 0, derived_key, 16);
+
+    std::vector<uint8_t> temp;
+    temp.insert(temp.end(), reinterpret_cast<uint8_t*>(&header) + 0x20, reinterpret_cast<uint8_t*>(&header) + sizeof(bl5_header));
+    temp.insert(temp.end(), data.begin(), data.end());
+
+    ExCryptRc4(derived_key, 16, temp.data(), temp.size());
+
+    std::memcpy(reinterpret_cast<uint8_t*>(&header) + 0x20, temp.data(), sizeof(bl5_header) - 0x20);
+    std::copy(temp.begin() + (sizeof(bl5_header) - 0x20), temp.begin() + (sizeof(bl5_header) - 0x20) + data.size(), data.begin());
+
+    decrypted = false;
 }
 
 bool BootloaderCe::is_decrypted() const {
