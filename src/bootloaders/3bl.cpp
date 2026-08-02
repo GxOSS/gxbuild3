@@ -1,5 +1,7 @@
 #include "bootloaders/3bl.hpp"
+#include "bootloaders/Keyvault.hpp"
 #include "Utils.hpp"
+#include "excrypt.h"
 #include <cstring>
 #include <stdexcept>
 
@@ -22,6 +24,7 @@ BootloaderSc BootloaderSc::parse(const std::vector<uint8_t>& bytes) {
 }
 
 void BootloaderSc::decrypt(const uint8_t cb_key[16]) {
+    if (decrypted) return;
     uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
     size_t encrypted_len = size_aligned - sizeof(bl3_header);
     
@@ -39,11 +42,36 @@ void BootloaderSc::decrypt(const uint8_t cb_key[16]) {
     decrypted = true;
 }
 
+void BootloaderSc::encrypt(const uint8_t cb_key[16]) {
+    if (!decrypted) return;
+    uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
+    size_t encrypted_len = size_aligned - sizeof(bl3_header);
+    
+    if (data.size() < encrypted_len) {
+        data.resize(encrypted_len, 0x00);
+    }
+    
+    bool is_zero = true;
+    for (size_t i = 0; i < 16; ++i) {
+        if (header.key[i] != 0) { is_zero = false; break; }
+    }
+    if (is_zero) {
+        ExCryptRandom(header.key, 16);
+    }
+    
+    uint8_t digest[20];
+    ExCryptHmacSha(cb_key, 16, header.key, 16, nullptr, 0, nullptr, 0, digest, 20);
+    
+    uint8_t rc4_key[16];
+    std::memcpy(rc4_key, digest, 16);
+    
+    ExCryptRc4(rc4_key, 16, data.data(), static_cast<uint32_t>(encrypted_len));
+    
+    decrypted = false;
+}
+
 bool BootloaderSc::is_decrypted() const {
-    if (decrypted) return true;
-    // Check if signature contains zeroes (usually decrypted indicators have clean padding)
-    // Or we can check if the header magic is valid SC/CC
-    return (header.header.magic == 0x5343 || header.header.magic == 0x4343);
+    return decrypted;
 }
 
 std::vector<uint8_t> BootloaderSc::serialize() const {

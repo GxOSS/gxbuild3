@@ -87,8 +87,7 @@ void BootloaderCd::encrypt(const uint8_t cb_b_key[16]) {
 }
 
 bool BootloaderCd::is_decrypted() const {
-    if (decrypted) return true;
-    return (header.header.magic == 0x5344 || header.header.magic == 0x4344);
+    return decrypted || (header.nonce_6bl[0] == 0x00);
 }
 
 std::vector<uint8_t> BootloaderCd::serialize() const {

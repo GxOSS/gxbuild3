@@ -1,5 +1,7 @@
 #include "bootloaders/7bl.hpp"
+#include "bootloaders/Keyvault.hpp"
 #include "Utils.hpp"
+#include "excrypt.h"
 #include <cstring>
 #include <stdexcept>
 
@@ -22,6 +24,7 @@ BootloaderCg BootloaderCg::parse(const std::vector<uint8_t>& bytes) {
 }
 
 void BootloaderCg::decrypt(const uint8_t cg_hmac[16]) {
+    if (decrypted) return;
     uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
     size_t payload_len = size_aligned - sizeof(bl_header);
     
@@ -44,9 +47,41 @@ void BootloaderCg::decrypt(const uint8_t cg_hmac[16]) {
     decrypted = true;
 }
 
+void BootloaderCg::encrypt(const uint8_t cg_hmac[16]) {
+    if (!decrypted) return;
+    uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
+    size_t payload_len = size_aligned - sizeof(bl_header);
+    
+    if (data.size() + sizeof(bl7_header) - sizeof(bl_header) < payload_len) {
+        size_t req = payload_len - (sizeof(bl7_header) - sizeof(bl_header));
+        data.resize(req, 0x00);
+    }
+
+    bool is_zero = true;
+    for (size_t i = 0; i < 16; ++i) {
+        if (header.key[i] != 0) { is_zero = false; break; }
+    }
+    if (is_zero) {
+        ExCryptRandom(header.key, 16);
+    }
+
+    uint8_t derived_key[16];
+    ExCryptHmacSha(cg_hmac, 16, header.key, 16, nullptr, 0, nullptr, 0, derived_key, 16);
+
+    std::vector<uint8_t> temp;
+    temp.insert(temp.end(), reinterpret_cast<const uint8_t*>(&header) + 0x20, reinterpret_cast<const uint8_t*>(&header) + sizeof(bl7_header));
+    temp.insert(temp.end(), data.begin(), data.end());
+
+    ExCryptRc4(derived_key, 16, temp.data(), temp.size());
+
+    std::memcpy(reinterpret_cast<uint8_t*>(&header) + 0x20, temp.data(), sizeof(bl7_header) - 0x20);
+    std::copy(temp.begin() + (sizeof(bl7_header) - 0x20), temp.begin() + (sizeof(bl7_header) - 0x20) + data.size(), data.begin());
+
+    decrypted = false;
+}
+
 bool BootloaderCg::is_decrypted() const {
-    if (decrypted) return true;
-    return (header.header.magic == 0x5347 || header.header.magic == 0x4347);
+    return decrypted || ((bswap32(header.original_size) & 0xFFF) == 0x000);
 }
 
 std::vector<uint8_t> BootloaderCg::serialize() const {

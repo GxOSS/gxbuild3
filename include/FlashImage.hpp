@@ -267,4 +267,5 @@ std::optional<build_layout_t> resolve_build_layout(const flash_image_t& image, B
 
 std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType build_type,
                                           std::optional<ConsoleType> console_type = std::nullopt,
-                                          bool nomobile = false);
+                                          bool nomobile = false,
+                                          std::span<const uint8_t> cpu_key = {});

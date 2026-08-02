@@ -40,7 +40,7 @@ bool BootloaderCb::verify_decrypted() const {
 }
 
 bool BootloaderCb::is_decrypted() const {
-    return decrypted || verify_decrypted();
+    return decrypted || verify_decrypted() || (data.size() > 0x240 && data[0x240] == 0x80);
 }
 
 void BootloaderCb::do_rc4_decrypt(const uint8_t key[16], size_t payload_len) {

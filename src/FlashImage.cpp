@@ -1029,12 +1029,34 @@ namespace {
         uint32_t cursor = slot_base;
         Log::Info("build: serializing {} from base 0x{:x}", slot_label, slot_base);
 
-        if (!write_bootloader_chain_entry(image.driver, patchslot.cf, cursor,
+        std::optional<std::vector<uint8_t>> cf_to_write = patchslot.cf;
+        std::optional<std::vector<uint8_t>> cg_to_write = patchslot.cg;
+
+        if (cf_to_write) {
+            auto cf = BootloaderCf::parse(*cf_to_write);
+            if (cf.is_decrypted()) {
+                cf.encrypt(key_1bl);
+                cf_to_write = cf.serialize();
+                Log::Info("build: re-encrypted {} CF (v{})", slot_label, cf.header.header.version);
+            }
+        }
+
+        if (cg_to_write) {
+            auto cg = BootloaderCg::parse(*cg_to_write);
+            if (cg.is_decrypted() && patchslot.cf) {
+                auto cf_raw = BootloaderCf::parse(*patchslot.cf);
+                cg.encrypt(cf_raw.header.mac);
+                cg_to_write = cg.serialize();
+                Log::Info("build: re-encrypted {} CG (v{})", slot_label, cg.header.header.version);
+            }
+        }
+
+        if (!write_bootloader_chain_entry(image.driver, cf_to_write, cursor,
                                           std::string(slot_label) + " CF")) {
             return false;
         }
 
-        if (!write_bootloader_chain_entry(image.driver, patchslot.cg, cursor,
+        if (!write_bootloader_chain_entry(image.driver, cg_to_write, cursor,
                                           std::string(slot_label) + " CG")) {
             return false;
         }
@@ -1042,7 +1064,8 @@ namespace {
         return true;
     }
 
-    bool write_build_bootloaders(flash_image_t& image, BuildType build_type, uint32_t& cursor_out) {
+    bool write_build_bootloaders(flash_image_t& image, BuildType build_type, uint32_t& cursor_out,
+                                  std::span<const uint8_t> cpu_key = {}) {
         const auto layout = resolve_build_layout(image, build_type);
         if (!layout) {
             Log::Warn("build: no layout available, skipping bootloader serialization");
@@ -1085,22 +1108,122 @@ namespace {
         if (layout->bootloader_chain_offset) {
             cursor = *layout->bootloader_chain_offset;
             Log::Info("build: serializing early bootloader chain from 0x{:x}", cursor);
-            if (!write_bootloader_chain_entry(image.driver, image.cb_or_A, cursor, "CB")) {
+
+            std::optional<std::vector<uint8_t>> cb_to_write = image.cb_or_A;
+            std::optional<std::vector<uint8_t>> cbx_to_write = image.cb_X;
+            std::optional<std::vector<uint8_t>> cbb_to_write = image.cb_B;
+            std::optional<std::vector<uint8_t>> sc_to_write = image.sc;
+            std::optional<std::vector<uint8_t>> cd_to_write = image.cd;
+            std::optional<std::vector<uint8_t>> ce_to_write = image.ce;
+
+            std::array<uint8_t, 16> active_cb_key{};
+            bool has_active_cb_key = false;
+            std::array<uint8_t, 16> active_cbb_key{};
+            bool has_active_cbb_key = false;
+            std::array<uint8_t, 16> active_cd_key{};
+            bool has_active_cd_key = false;
+
+            if (cb_to_write) {
+                auto cb = BootloaderCb::parse(*cb_to_write);
+                if (cb.is_decrypted()) {
+                    cb.encrypt(key_1bl);
+                    cb_to_write = cb.serialize();
+                    Log::Info("build: re-encrypted CB (v{})", cb.header.header.version);
+                }
+                auto cb_raw = BootloaderCb::parse(*image.cb_or_A);
+                if (cb_raw.derived_key) {
+                    active_cb_key = *cb_raw.derived_key;
+                    has_active_cb_key = true;
+                } else if (image.cb_or_A->size() >= 0x20) {
+                    uint8_t digest[20];
+                    ExCryptHmacSha(key_1bl, 16, image.cb_or_A->data() + 0x10, 0x10, nullptr, 0, nullptr, 0, digest, 20);
+                    std::memcpy(active_cb_key.data(), digest, 16);
+                    has_active_cb_key = true;
+                }
+            }
+
+            if (cbx_to_write) {
+                auto cbx = BootloaderCb::parse(*cbx_to_write);
+                if (cbx.is_decrypted()) {
+                    cbx.encrypt(key_1bl);
+                    cbx_to_write = cbx.serialize();
+                    Log::Info("build: re-encrypted CB_X (v{})", cbx.header.header.version);
+                }
+            }
+
+            if (cbb_to_write) {
+                auto cbb = BootloaderCb::parse(*cbb_to_write);
+                uint8_t effective_cpu_key[16] = {};
+                if (cpu_key.size() == 16 && !std::all_of(cpu_key.begin(), cpu_key.end(), [](uint8_t b) { return b == 0; })) {
+                    std::memcpy(effective_cpu_key, cpu_key.data(), 16);
+                }
+                if (cbb.is_decrypted() && has_active_cb_key) {
+                    cbb.encrypt_v1(active_cb_key.data(), effective_cpu_key);
+                    cbb_to_write = cbb.serialize();
+                    Log::Info("build: re-encrypted CB_B (v{})", cbb.header.header.version);
+                }
+                if (image.cb_B->size() >= 0x20 && has_active_cb_key) {
+                    uint8_t digest[20];
+                    ExCryptHmacSha(active_cb_key.data(), 16, image.cb_B->data() + 0x10, 16,
+                                   effective_cpu_key, 16, nullptr, 0, digest, 20);
+                    std::memcpy(active_cbb_key.data(), digest, 16);
+                    has_active_cbb_key = true;
+                }
+            }
+
+            const uint8_t* effective_cb_key = has_active_cbb_key ? active_cbb_key.data()
+                                             : (has_active_cb_key ? active_cb_key.data() : nullptr);
+
+            if (sc_to_write) {
+                auto sc = BootloaderSc::parse(*sc_to_write);
+                if (sc.is_decrypted() && effective_cb_key) {
+                    sc.encrypt(effective_cb_key);
+                    sc_to_write = sc.serialize();
+                    Log::Info("build: re-encrypted SC (v{})", sc.header.header.version);
+                }
+            }
+
+            if (cd_to_write) {
+                auto cd = BootloaderCd::parse(*cd_to_write);
+                if (cd.is_decrypted() && effective_cb_key) {
+                    cd.encrypt(effective_cb_key);
+                    cd_to_write = cd.serialize();
+                    Log::Info("build: re-encrypted CD (v{})", cd.header.header.version);
+                }
+                if (effective_cb_key) {
+                    auto cd_raw = BootloaderCd::parse(*image.cd);
+                    uint8_t digest[20];
+                    ExCryptHmacSha(effective_cb_key, 16, cd_raw.header.rsa_pub_key, 16, nullptr, 0, nullptr, 0, digest, 20);
+                    std::memcpy(active_cd_key.data(), digest, 16);
+                    has_active_cd_key = true;
+                }
+            }
+
+            if (ce_to_write) {
+                auto ce = BootloaderCe::parse(*ce_to_write);
+                if (ce.is_decrypted() && has_active_cd_key) {
+                    ce.encrypt(active_cd_key.data());
+                    ce_to_write = ce.serialize();
+                    Log::Info("build: re-encrypted CE (v{})", ce.header.header.version);
+                }
+            }
+
+            if (!write_bootloader_chain_entry(image.driver, cb_to_write, cursor, "CB")) {
                 return false;
             }
-            if (!write_bootloader_chain_entry(image.driver, image.cb_X, cursor, "CB_X")) {
+            if (!write_bootloader_chain_entry(image.driver, cbx_to_write, cursor, "CB_X")) {
                 return false;
             }
-            if (!write_bootloader_chain_entry(image.driver, image.cb_B, cursor, "CB_B")) {
+            if (!write_bootloader_chain_entry(image.driver, cbb_to_write, cursor, "CB_B")) {
                 return false;
             }
-            if (!write_bootloader_chain_entry(image.driver, image.sc, cursor, "SC")) {
+            if (!write_bootloader_chain_entry(image.driver, sc_to_write, cursor, "SC")) {
                 return false;
             }
-            if (!write_bootloader_chain_entry(image.driver, image.cd, cursor, "CD")) {
+            if (!write_bootloader_chain_entry(image.driver, cd_to_write, cursor, "CD")) {
                 return false;
             }
-            if (!write_bootloader_chain_entry(image.driver, image.ce, cursor, "CE")) {
+            if (!write_bootloader_chain_entry(image.driver, ce_to_write, cursor, "CE")) {
                 return false;
             }
         }
@@ -1913,7 +2036,8 @@ bool write_build_mobile_data(flash_image_t& image, uint32_t base_fs_block,
 }
 
 std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType build_type,
-                                          std::optional<ConsoleType> console_type, bool nomobile) {
+                                          std::optional<ConsoleType> console_type, bool nomobile,
+                                          std::span<const uint8_t> cpu_key) {
     flash_image_t built = image;
     const bool had_backing_image = has_backing_image(image);
 
@@ -1926,7 +2050,7 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
     }
 
     uint32_t cursor = 0x8000;
-    if (!write_build_bootloaders(built, build_type, cursor)) {
+    if (!write_build_bootloaders(built, build_type, cursor, cpu_key)) {
         return std::nullopt;
     }
 
@@ -2039,12 +2163,11 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
 
                         // Re-write updated encrypted CF to NAND image driver
                         if (patchslot_offset != 0) {
-                            auto cf_enc = cf_bytes;
-                            if (cf_enc.size() >= 0x30) {
-                                uint8_t derived_key[16];
-                                ExCryptHmacSha(key_1bl, 16, cf_enc.data() + 0x20, 16, nullptr, 0, nullptr, 0, derived_key, 16);
-                                ExCryptRc4(derived_key, 16, cf_enc.data() + 0x30, static_cast<uint32_t>(cf_enc.size() - 0x30));
+                            auto cf_obj = BootloaderCf::parse(cf_bytes);
+                            if (cf_obj.is_decrypted()) {
+                                cf_obj.encrypt(key_1bl);
                             }
+                            auto cf_enc = cf_obj.serialize();
                             built.driver.write(patchslot_offset, cf_enc.data(), cf_enc.size());
                         }
                     }
