@@ -1562,8 +1562,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                             std::memcpy(cg_hmac.data(), parsed_cf.header.mac, 16);
                             has_cg_hmac = true;
                         }
-                        if (!cg.is_decrypted() && has_cg_hmac) {
-                            cg.decrypt(cg_hmac.data());
+                        if (cg.is_decrypted() && has_cg_hmac) {
+                            cg.encrypt(cg_hmac.data());
                         }
                         if (!slot) {
                             slot.emplace();
@@ -1571,17 +1571,20 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                         auto cg_bytes = cg.serialize();
                         std::string xexp_filename = is_slot1 ? "sysupdate.xexp2" : "sysupdate.xexp1";
 
-                        if (cg_bytes.size() > 0x10000) {
-                            Log::Info("CG ({}) size 0x{:x} exceeds 64KB (0x10000), splitting overflow into FlashFS '{}'...",
-                                      is_slot1 ? "slot 1" : "slot 0", cg_bytes.size(), xexp_filename);
-                            std::vector<uint8_t> cg_trimmed(cg_bytes.begin(), cg_bytes.begin() + 0x10000);
+                        const size_t cf_size = (slot && slot->cf) ? slot->cf->size() : 0x4560;
+                        const size_t max_cg_in_slot = (0x10000 > cf_size) ? (0x10000 - cf_size) : 0x10000;
+
+                        if (cg_bytes.size() > max_cg_in_slot) {
+                            Log::Info("CG ({}) size 0x{:x} exceeds patchslot limit (0x{:x}), splitting overflow into FlashFS '{}'...",
+                                      is_slot1 ? "slot 1" : "slot 0", cg_bytes.size(), max_cg_in_slot, xexp_filename);
+                            std::vector<uint8_t> cg_trimmed(cg_bytes.begin(), cg_bytes.begin() + max_cg_in_slot);
                             slot->cg = std::move(cg_trimmed);
 
                             if (!new_nand.flashfs_payloads) {
                                 new_nand.flashfs_payloads.emplace();
                             }
 
-                            std::vector<uint8_t> xexp(cg_bytes.begin() + 0x10000, cg_bytes.end());
+                            std::vector<uint8_t> xexp(cg_bytes.begin() + max_cg_in_slot, cg_bytes.end());
                             (*new_nand.flashfs_payloads)[xexp_filename] = std::move(xexp);
                             Log::Info("Staged '{}' in FlashFS (0x{:x} bytes)", xexp_filename,
                                       (*new_nand.flashfs_payloads)[xexp_filename].size());
