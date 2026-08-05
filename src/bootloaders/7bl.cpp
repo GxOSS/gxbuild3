@@ -2,6 +2,7 @@
 #include "bootloaders/Keyvault.hpp"
 #include "Utils.hpp"
 #include "excrypt.h"
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 

@@ -1,5 +1,7 @@
 #include "bootloaders/SMC.hpp"
 
+#include <algorithm>
+
 const uint8_t XECRYPT_SMC_KEY[4] = {0x42, 0x75, 0x4E, 0x79};
 
 std::vector<uint8_t> smc_decrypt(const std::vector<uint8_t>& data) {

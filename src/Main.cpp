@@ -17,6 +17,7 @@
 #include <CLI/App.hpp>
 #include <CLI/Config.hpp>
 #include <CLI/Formatter.hpp>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>

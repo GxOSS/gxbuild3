@@ -1,6 +1,7 @@
 #include "bootloaders/5bl.hpp"
 #include "bootloaders/Keyvault.hpp"
 #include "Utils.hpp"
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 

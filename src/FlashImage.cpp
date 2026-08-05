@@ -8,6 +8,7 @@
 #include "excrypt.h"
 #include "utils/FlashBlockDriver.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <fstream>
