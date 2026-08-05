@@ -12,8 +12,8 @@ add_subdirectory(extern/GxCrypt)
 add_subdirectory(extern/spdlog)
 add_subdirectory(extern/stfs)
 
-add_executable(gxbuild3
-    src/Main.cpp
+set(GXBUILD3_LIB_SOURCES
+    src/GxBuild.cpp
     src/Log.cpp
     src/Options.cpp
     src/Utils.cpp
@@ -38,6 +38,27 @@ add_executable(gxbuild3
     src/bootloaders/XConfig.cpp
 )
 
+add_library(gxbuild3_lib STATIC ${GXBUILD3_LIB_SOURCES})
+
+target_compile_features(gxbuild3_lib PRIVATE cxx_std_23)
+set_target_properties(gxbuild3_lib PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+)
+
+target_include_directories(gxbuild3_lib PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(gxbuild3_lib PUBLIC
+    GxCrypt
+    spdlog::spdlog
+    stfs
+)
+
+add_executable(gxbuild3 src/Main.cpp)
+
 target_compile_features(gxbuild3 PRIVATE cxx_std_23)
 set_target_properties(gxbuild3 PROPERTIES
     CXX_STANDARD 23
@@ -45,26 +66,22 @@ set_target_properties(gxbuild3 PROPERTIES
     CXX_EXTENSIONS OFF
 )
 
-target_include_directories(gxbuild3 PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
-
 target_link_libraries(gxbuild3 PRIVATE
+    gxbuild3_lib
     CLI11::CLI11
-    GxCrypt
-    spdlog::spdlog
-    stfs
 )
 
 if(MSVC)
+    target_compile_options(gxbuild3_lib PRIVATE /W4 /WX /permissive- /utf-8)
     target_compile_options(gxbuild3 PRIVATE /W4 /WX /permissive- /utf-8)
 else()
+    target_compile_options(gxbuild3_lib PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(gxbuild3 PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 include(GNUInstallDirs)
 
-install(TARGETS gxbuild3
+install(TARGETS gxbuild3 gxbuild3_lib
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

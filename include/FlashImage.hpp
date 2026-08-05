@@ -251,6 +251,12 @@ nand_results_t read(const std::vector<uint8_t>& data);
 // New function that uses FlashBlockDriver directly
 nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver);
 
+std::optional<gxbuild3::bootloaders::XeCoronaFsData>
+read_corona_config_block(const gxbuild3::utils::FlashBlockDriver& driver);
+
+bool write_corona_config_block(gxbuild3::utils::FlashBlockDriver& driver,
+                               const gxbuild3::bootloaders::XeCoronaFsData& config);
+
 raw_nand_header_t parse_nand_header(std::span<const uint8_t> raw);
 
 flash_image_t parse(const std::vector<uint8_t>& data);

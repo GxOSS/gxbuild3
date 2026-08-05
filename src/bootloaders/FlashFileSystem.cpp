@@ -441,6 +441,9 @@ namespace gxbuild3::bootloaders {
             auto spare = m_block_driver->read_lil_block_spare(block_idx);
             if (spare) {
                 m_version = m_block_driver->get_spare_seq_field(spare->data());
+            } else if (m_block_driver->flash_config() == gxbuild3::utils::FlashConfig::Corona4GB) {
+                m_version = 1;
+                Log::Info("load: no spare available on Corona eMMC, using version {}", m_version);
             } else {
                 Log::Error("load: failed to read spare data");
                 return false;

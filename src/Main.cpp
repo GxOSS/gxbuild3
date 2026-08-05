@@ -1559,7 +1559,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
                         auto& slot = is_slot1 ? new_nand.patchslot_1 : new_nand.patchslot_0;
                         if (slot && slot->cf) {
                             auto parsed_cf = BootloaderCf::parse(*slot->cf);
-                            std::memcpy(cg_hmac.data(), parsed_cf.header.mac, 16);
+                            std::memcpy(cg_hmac.data(), parsed_cf.header.cg_key, 16);
                             has_cg_hmac = true;
                         }
                         if (cg.is_decrypted() && has_cg_hmac) {

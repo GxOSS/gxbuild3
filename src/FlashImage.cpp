@@ -5,6 +5,7 @@
 #include "bootloaders/Common.hpp"
 #include "bootloaders/Keyvault.hpp"
 #include "bootloaders/SMC.hpp"
+#include "excrypt.h"
 #include "utils/FlashBlockDriver.hpp"
 
 #include <array>
@@ -1045,7 +1046,7 @@ namespace {
             auto cg = BootloaderCg::parse(*cg_to_write);
             if (cg.is_decrypted() && patchslot.cf) {
                 auto cf_raw = BootloaderCf::parse(*patchslot.cf);
-                cg.encrypt(cf_raw.header.mac);
+                cg.encrypt(cf_raw.header.cg_key);
                 cg_to_write = cg.serialize();
                 Log::Info("build: re-encrypted {} CG (v{})", slot_label, cg.header.header.version);
             }
@@ -1447,6 +1448,74 @@ static uint32_t find_next_bl_offset(uint32_t current_offset, uint32_t current_si
     return current_offset + ((current_size + 0xF) & ~0xF);
 }
 
+std::optional<XeCoronaFsData> read_corona_config_block(const gxbuild3::utils::FlashBlockDriver& driver) {
+    if (driver.flash_config() != gxbuild3::utils::FlashConfig::Corona4GB) {
+        return std::nullopt;
+    }
+
+    const uint32_t config_block = driver.config_block_idx();
+    const uint32_t config_offset = config_block * driver.block_length();
+
+    auto data = driver.read(config_offset, sizeof(XeCoronaFsData));
+    if (!data || data->size() < sizeof(XeCoronaFsData)) {
+        Log::Error("read_corona_config_block: failed to read config block at offset 0x{:x}", config_offset);
+        return std::nullopt;
+    }
+
+    XeCoronaFsData raw_cfg{};
+    std::memcpy(&raw_cfg, data->data(), sizeof(XeCoronaFsData));
+
+    XeCoronaFsData cfg{};
+    std::memcpy(cfg.section_digest, raw_cfg.section_digest, sizeof(cfg.section_digest));
+    cfg.unknown1 = bswap32(raw_cfg.unknown1);
+    cfg.fs_version = bswap32(raw_cfg.fs_version);
+    cfg.fs_block_idx = bswap16(raw_cfg.fs_block_idx);
+    cfg.unknown2 = bswap16(raw_cfg.unknown2);
+    cfg.mobile1_block_idx = bswap16(raw_cfg.mobile1_block_idx);
+    cfg.mobile1_length = bswap16(raw_cfg.mobile1_length);
+    std::memcpy(cfg.unknown3, raw_cfg.unknown3, sizeof(cfg.unknown3));
+    cfg.mobile2_block_idx = bswap16(raw_cfg.mobile2_block_idx);
+    cfg.mobile2_length = bswap16(raw_cfg.mobile2_length);
+    std::memcpy(cfg.reserved, raw_cfg.reserved, sizeof(cfg.reserved));
+
+    Log::Info("Read Corona config block at block 0x{:x} (0x{:x}): fs_block_idx=0x{:x}, fs_version=0x{:x}",
+              config_block, config_offset, cfg.fs_block_idx, cfg.fs_version);
+
+    return cfg;
+}
+
+bool write_corona_config_block(gxbuild3::utils::FlashBlockDriver& driver,
+                               const XeCoronaFsData& config) {
+    if (driver.flash_config() != gxbuild3::utils::FlashConfig::Corona4GB) {
+        return false;
+    }
+
+    XeCoronaFsData raw_cfg{};
+    raw_cfg.unknown1 = bswap32(config.unknown1);
+    raw_cfg.fs_version = bswap32(config.fs_version);
+    raw_cfg.fs_block_idx = bswap16(config.fs_block_idx);
+    raw_cfg.unknown2 = bswap16(config.unknown2);
+    raw_cfg.mobile1_block_idx = bswap16(config.mobile1_block_idx);
+    raw_cfg.mobile1_length = bswap16(config.mobile1_length);
+    std::memcpy(raw_cfg.unknown3, config.unknown3, sizeof(raw_cfg.unknown3));
+    raw_cfg.mobile2_block_idx = bswap16(config.mobile2_block_idx);
+    raw_cfg.mobile2_length = bswap16(config.mobile2_length);
+    std::memcpy(raw_cfg.reserved, config.reserved, sizeof(raw_cfg.reserved));
+
+    // Compute SHA1 digest of payload (offset 0x14 to 0x200, length 0x1EC = 492 bytes)
+    ExCryptSha(reinterpret_cast<const uint8_t*>(&raw_cfg) + 0x14, 0x1EC,
+               nullptr, 0, nullptr, 0,
+               raw_cfg.section_digest, 0x14);
+
+    const uint32_t config_block = driver.config_block_idx();
+    const uint32_t config_offset = config_block * driver.block_length();
+
+    Log::Info("Writing Corona config block at block 0x{:x} (0x{:x}): fs_block_idx=0x{:x}, fs_version=0x{:x}",
+              config_block, config_offset, config.fs_block_idx, config.fs_version);
+
+    return driver.write(config_offset, reinterpret_cast<const uint8_t*>(&raw_cfg), sizeof(XeCoronaFsData));
+}
+
 nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
     nand_results_t results{};
     const size_t image_size = driver.image_length_real();
@@ -1507,22 +1576,58 @@ nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
         mobile_blocks = calculate_mobile_blocks_count(*results.mobile_results, pages_per_block);
     }
 
-    if (auto detected_root = detect_flashfs_root_from_spare(driver)) {
-        const uint32_t detected_fs_offset = detected_root->block_idx * driver.lil_block_length();
-        Log::Info("Detected FlashFS from spare data at 0x{:x} (block 0x{:x}, header hint: 0x{:x}, "
-                  "mobile blocks: {})",
-                  detected_fs_offset, detected_root->block_idx, results.fs_offset, mobile_blocks);
-        results.fs_offset = detected_fs_offset;
-        results.fs_block_idx = static_cast<uint16_t>(detected_root->block_idx);
-    } else {
-        auto base_fs_block = fs_offset_to_block_idx(driver, results.fs_offset);
-        if (base_fs_block) {
-            results.fs_block_idx = static_cast<uint16_t>(*base_fs_block + mobile_blocks);
-            Log::Info("Resolved FlashFS root block index 0x{:x} from header offset 0x{:x} + {} "
-                      "mobile blocks",
-                      *results.fs_block_idx, results.fs_offset, mobile_blocks);
+    if (driver.flash_config() == gxbuild3::utils::FlashConfig::Corona4GB) {
+        auto corona_cfg = read_corona_config_block(driver);
+        if (corona_cfg && corona_cfg->fs_block_idx != 0) {
+            results.fs_block_idx = corona_cfg->fs_block_idx;
+            results.fs_offset = corona_cfg->fs_block_idx * driver.lil_block_length();
+            Log::Info("Detected FlashFS from Corona config block at 0x{:x} (block 0x{:x}, version 0x{:x})",
+                      results.fs_offset, *results.fs_block_idx, corona_cfg->fs_version);
+
+            if (corona_cfg->mobile1_block_idx != 0 || corona_cfg->mobile2_block_idx != 0) {
+                mobile_results_t mob{};
+                const uint32_t pages_per_block = (driver.block_length() != 0 && driver.page_length() != 0)
+                    ? (driver.block_length() / driver.page_length()) : 32;
+
+                if (corona_cfg->mobile1_block_idx != 0) {
+                    mobile_result_t res1{};
+                    res1.block_type = 0x31;
+                    res1.start_page = corona_cfg->mobile1_block_idx * pages_per_block;
+                    res1.page_count = corona_cfg->mobile1_length * pages_per_block;
+                    res1.data_length = corona_cfg->mobile1_length * driver.block_length();
+                    mob.x31 = res1;
+                }
+                if (corona_cfg->mobile2_block_idx != 0) {
+                    mobile_result_t res2{};
+                    res2.block_type = 0x32;
+                    res2.start_page = corona_cfg->mobile2_block_idx * pages_per_block;
+                    res2.page_count = corona_cfg->mobile2_length * pages_per_block;
+                    res2.data_length = corona_cfg->mobile2_length * driver.block_length();
+                    mob.x32 = res2;
+                }
+                results.mobile_results = mob;
+            }
+        }
+    }
+
+    if (!results.fs_block_idx) {
+        if (auto detected_root = detect_flashfs_root_from_spare(driver)) {
+            const uint32_t detected_fs_offset = detected_root->block_idx * driver.lil_block_length();
+            Log::Info("Detected FlashFS from spare data at 0x{:x} (block 0x{:x}, header hint: 0x{:x}, "
+                      "mobile blocks: {})",
+                      detected_fs_offset, detected_root->block_idx, results.fs_offset, mobile_blocks);
+            results.fs_offset = detected_fs_offset;
+            results.fs_block_idx = static_cast<uint16_t>(detected_root->block_idx);
         } else {
-            results.fs_block_idx = std::nullopt;
+            auto base_fs_block = fs_offset_to_block_idx(driver, results.fs_offset);
+            if (base_fs_block) {
+                results.fs_block_idx = static_cast<uint16_t>(*base_fs_block + mobile_blocks);
+                Log::Info("Resolved FlashFS root block index 0x{:x} from header offset 0x{:x} + {} "
+                          "mobile blocks",
+                          *results.fs_block_idx, results.fs_offset, mobile_blocks);
+            } else {
+                results.fs_block_idx = std::nullopt;
+            }
         }
     }
 
@@ -1677,6 +1782,10 @@ FlashImage FlashImage::parse(std::vector<uint8_t> data) {
 
     image.header = parse_nand_header(std::span<const uint8_t>(*header_data));
 
+    if (image.driver.flash_config() == gxbuild3::utils::FlashConfig::Corona4GB) {
+        image.corona_fs_data = read_corona_config_block(image.driver);
+    }
+
     image.nand_results = read(image.driver);
 
     if (image.nand_results && image.nand_results->valid) {
@@ -1710,7 +1819,11 @@ FlashImage FlashImage::parse(std::vector<uint8_t> data) {
 
         if (image.nand_results->fs_block_idx) {
             auto fs_driver = std::make_shared<gxbuild3::utils::FlashBlockDriver>(image.driver);
-            gxbuild3::bootloaders::FlashFileSystem filesystem(fs_driver);
+            std::shared_ptr<XeCoronaFsData> corona_data;
+            if (image.corona_fs_data) {
+                corona_data = std::make_shared<XeCoronaFsData>(*image.corona_fs_data);
+            }
+            gxbuild3::bootloaders::FlashFileSystem filesystem(fs_driver, corona_data);
             if (filesystem.load(*image.nand_results->fs_block_idx)) {
                 image.flashfs_files = flashfs_files_t{};
                 load_known_flashfs_files(filesystem, *image.flashfs_files);
@@ -2028,6 +2141,19 @@ bool write_build_mobile_data(flash_image_t& image, uint32_t base_fs_block,
             }
         }
 
+        if (image.driver.flash_config() == gxbuild3::utils::FlashConfig::Corona4GB) {
+            if (!const_cast<flash_image_t&>(image).corona_fs_data) {
+                const_cast<flash_image_t&>(image).corona_fs_data = XeCoronaFsData{};
+            }
+            if (block_type == 0x31) {
+                const_cast<flash_image_t&>(image).corona_fs_data->mobile1_block_idx = static_cast<uint16_t>(current_block_idx);
+                const_cast<flash_image_t&>(image).corona_fs_data->mobile1_length = static_cast<uint16_t>(blocks_needed);
+            } else if (block_type == 0x32) {
+                const_cast<flash_image_t&>(image).corona_fs_data->mobile2_block_idx = static_cast<uint16_t>(current_block_idx);
+                const_cast<flash_image_t&>(image).corona_fs_data->mobile2_length = static_cast<uint16_t>(blocks_needed);
+            }
+        }
+
         current_block_idx += blocks_needed;
         written_mobile_blocks += static_cast<uint16_t>(blocks_needed);
     }
@@ -2094,7 +2220,16 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
     log_flashfs_plan(built, payloads, fs_root_block_idx, fs_version, sys_update_addr);
 
     auto fs_driver = std::make_shared<gxbuild3::utils::FlashBlockDriver>(built.driver);
-    gxbuild3::bootloaders::FlashFileSystem filesystem(fs_driver);
+    std::shared_ptr<XeCoronaFsData> corona_data;
+    if (built.driver.flash_config() == gxbuild3::utils::FlashConfig::Corona4GB) {
+        if (built.corona_fs_data) {
+            corona_data = std::make_shared<XeCoronaFsData>(*built.corona_fs_data);
+        } else {
+            corona_data = std::make_shared<XeCoronaFsData>();
+        }
+    }
+
+    gxbuild3::bootloaders::FlashFileSystem filesystem(fs_driver, corona_data);
 
     Log::Info("Initializing FlashFS defaults at block 0x{:x}...", fs_root_block_idx);
     if (!filesystem.create_defaults(fs_root_block_idx, fs_version, sys_update_addr,
@@ -2135,9 +2270,10 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
                 size_t chain_len = 0;
                 auto chain = filesystem.get_chain(entry->block_number, chain_len);
                 if (chain && !chain->empty()) {
+                    const auto layout = resolve_build_layout(built, build_type);
                     uint32_t patchslot_offset = is_slot1
-                        ? (built.header.cf1_offset ? bswap32(built.header.cf1_offset) + 0x10000 : 0)
-                        : (built.header.cf1_offset ? bswap32(built.header.cf1_offset) : 0);
+                        ? (layout && layout->patchslot_1_base ? *layout->patchslot_1_base : (built.header.cf1_offset ? bswap32(built.header.cf1_offset) + 0x10000 : 0xC0000))
+                        : (layout && layout->patchslot_base ? *layout->patchslot_base : (built.header.cf1_offset ? bswap32(built.header.cf1_offset) : 0xB0000));
 
                     // Update total CG size in CF header (0x10000 base + overflow size)
                     uint32_t total_cg_size = 0x10000 + static_cast<uint32_t>(data.size());
@@ -2184,6 +2320,14 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
     Log::Info("Saving FlashFS to block 0x{:x}...done!", fs_root_block_idx);
 
     built.driver = *fs_driver;
+
+    if (built.driver.flash_config() == gxbuild3::utils::FlashConfig::Corona4GB) {
+        auto& corona = filesystem.corona_data();
+        if (corona) {
+            write_corona_config_block(built.driver, *corona);
+        }
+    }
+
     Log::Info("build: image serialization complete (0x{:x} bytes)",
               built.driver.image_data().size());
     return built.driver.image_data();
