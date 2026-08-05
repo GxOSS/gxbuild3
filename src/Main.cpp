@@ -153,18 +153,19 @@ int main(int argc, char** argv) {
     build_sub->add_option("-8,--raw", args.raw_patches)->description("Raw patch entries");
     build_sub->add_option("-u,--update", args.xboxupd)->description("xboxupd.bin path");
     build_sub->add_option("-a,--addon", args.addons)->description("Addon packages");
-    build_sub->add_option("-l,--image", args.source_nand)->description("Source NAND image");
-    app.add_option("-l,--image", args.source_nand)->description("Source NAND image");
+    app.add_option("-l,--image,image", args.source_nand)->description("Source NAND image");
     app.add_option("--ecc", args.ecc)->description("ECC file");
     app.add_option("-s,--sha", args.sha_file)->description("SHA file path");
 
     build_sub->add_flag("-v,--verbose", args.verbose)->description("Enable verbose trace logging");
-    build_sub->add_option("-g,--output-dir", args.output_dir)->description("Output directory");
     // output options
     build_sub->add_option("output", args.output)->description("Output file");
     app.add_option("--format", args.format)->description("Output format");
     app.add_option("-g,--output-dir", args.output_dir)->description("Output directory");
 
+    build_sub->fallthrough();
+    extract_sub->fallthrough();
+    stfs_sub->fallthrough();
     build_sub->callback([&args]() { args.mode = "build"; });
     extract_sub->callback([&args]() { args.mode = "extract"; });
     extract_sub->add_flag("--all", args.extract_all, "Extract all files");
@@ -439,7 +440,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
     if (args.mode == "extract") {
         if (!args.source_nand) {
-            static const std::vector<std::string> kDonorCandidates = {"nanddump.bin"};
+            static const std::vector<std::string> kDonorCandidates = {
+                "nanddump.bin", "nanddump1.bin", "nanddump2.bin", "nand.bin", "dump.bin"
+            };
             std::vector<std::filesystem::path> search_roots;
             if (args.fw_dir)
                 search_roots.push_back(*args.fw_dir);

@@ -548,14 +548,10 @@ namespace gxbuild3::bootloaders {
 
         for (size_t i = first_new_idx; i < m_entries.size(); i++) {
             if (!m_entries[i].is_valid()) {
-                break;
+                continue;
             }
 
-            // Fix filename if it starts with 0x05 (special character)
-            if (m_entries[i].filename[0] == '\x05') {
-                m_entries[i].filename[0] = '_';
-            }
-
+            m_entries[first_new_idx + valid_new_entries] = m_entries[i];
             valid_new_entries++;
         }
 

@@ -1433,6 +1433,11 @@ static auto read_bl_header(const gxbuild3::utils::FlashBlockDriver& driver, uint
     if (magic == 0) {
         return std::nullopt;
     }
+    try {
+        get_bl_type(magic);
+    } catch (...) {
+        return std::nullopt;
+    }
 
     bl_results_t result;
     result.magic = magic;
@@ -1721,21 +1726,13 @@ nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
 
     // Handle patchslots
     if (results.patch_slots > 1 && results.cf0) {
-        uint32_t cf1_offset = results.cf0->offset + results.cf0->size;
+        uint32_t cf1_offset = results.cf0->offset + 0x10000;
         auto cf1_result = read_bl_header(driver, cf1_offset);
-        if (cf1_result) {
+        if (cf1_result && get_bl_type(static_cast<uint16_t>(cf1_result->magic)) == CF) {
             results.cf1 = *cf1_result;
-        } else if (cf1_offset_swapped != 0 && cf1_offset_swapped != 0xFFFFFFFF) {
-            cf1_result = read_bl_header(driver, cf1_offset_swapped);
-            if (cf1_result) {
-                results.cf1 = *cf1_result;
-            }
-        }
-
-        if (results.cg0) {
-            uint32_t cg1_offset = results.cg0->offset + results.cg0->size;
+            uint32_t cg1_offset = cf1_result->offset + cf1_result->size;
             auto cg1_result = read_bl_header(driver, cg1_offset);
-            if (cg1_result) {
+            if (cg1_result && get_bl_type(static_cast<uint16_t>(cg1_result->magic)) == CG) {
                 results.cg1 = *cg1_result;
             }
         }
@@ -1889,7 +1886,9 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
             cb.decrypt(bl_key_bytes.data());
 
         const auto cb_serialized = cb.serialize();
-        const std::string filename = cb.is_decrypted() ? "CB.bin" : "CB_enc.bin";
+        const std::string crypt_str = cb.is_decrypted() ? "dec" : "enc";
+        const std::string type_str = results.cbb ? "cba" : "cb";
+        const std::string filename = fmt::format("{}_{}_{}.bin", type_str, cb.header.header.version, crypt_str);
         WriteFile(output_dir / filename, AsByteSpan(cb_serialized));
         Log::Info("Extracted 2BL: {} (v{})", filename, cb.header.header.version);
 
@@ -1900,7 +1899,7 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
     if (results.cbx) {
         auto cbx_bytes = extract_region(results.cbx->offset, results.cbx->size);
         if (cbx_bytes) {
-            const std::string filename = "CB_X.bin";
+            const std::string filename = "cbx_enc.bin";
             WriteFile(output_dir / filename, AsByteSpan(*cbx_bytes));
             Log::Info("Extracted 2BL_X: {}", filename);
         }
@@ -1916,7 +1915,8 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
             }
 
             const auto cb_b_serialized = cb_b.serialize();
-            const std::string filename = cb_b.is_decrypted() ? "CB_B.bin" : "CB_B_enc.bin";
+            const std::string crypt_str = cb_b.is_decrypted() ? "dec" : "enc";
+            const std::string filename = fmt::format("cbb_{}_{}.bin", cb_b.header.header.version, crypt_str);
             WriteFile(output_dir / filename, AsByteSpan(cb_b_serialized));
             Log::Info("Extracted 2BL_B: {} (v{})", filename, cb_b.header.header.version);
 
@@ -1937,7 +1937,8 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
             sc.decrypt(active_cb_key);
 
         const auto sc_serialized = sc.serialize();
-        const std::string filename = sc.is_decrypted() ? "SC.bin" : "SC_enc.bin";
+        const std::string crypt_str = sc.is_decrypted() ? "dec" : "enc";
+        const std::string filename = fmt::format("sc_{}_{}.bin", sc.header.header.version, crypt_str);
         WriteFile(output_dir / filename, AsByteSpan(sc_serialized));
         Log::Info("Extracted 3BL/SC: {} (v{})", filename, sc.header.header.version);
     }
@@ -1954,7 +1955,8 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
                 cd.decrypt(active_cb_key);
 
             const auto cd_serialized = cd.serialize();
-            const std::string filename = cd.is_decrypted() ? "CD.bin" : "CD_enc.bin";
+            const std::string crypt_str = cd.is_decrypted() ? "dec" : "enc";
+            const std::string filename = fmt::format("cd_{}_{}.bin", cd.header.header.version, crypt_str);
             WriteFile(output_dir / filename, AsByteSpan(cd_serialized));
             Log::Info("Extracted 4BL/CD: {} (v{})", filename, cd.header.header.version);
 
@@ -1973,7 +1975,8 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
                 ce.decrypt(cd_key);
 
             const auto ce_serialized = ce.serialize();
-            const std::string filename = ce.is_decrypted() ? "CE.bin" : "CE_enc.bin";
+            const std::string crypt_str = ce.is_decrypted() ? "dec" : "enc";
+            const std::string filename = fmt::format("ce_{}_{}.bin", ce.header.header.version, crypt_str);
             WriteFile(output_dir / filename, AsByteSpan(ce_serialized));
             Log::Info("Extracted 5BL/CE: {} (v{})", filename, ce.header.header.version);
 
@@ -1991,7 +1994,8 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
                 cf.decrypt(bl_key_bytes.data());
 
             const auto cf_serialized = cf.serialize();
-            const std::string filename = cf.is_decrypted() ? "CF.bin" : "CF_enc.bin";
+            const std::string crypt_str = cf.is_decrypted() ? "dec" : "enc";
+            const std::string filename = fmt::format("cf_{}_{}.bin", cf.header.header.version, crypt_str);
             WriteFile(output_dir / filename, AsByteSpan(cf_serialized));
             Log::Info("Extracted 6BL/CF: {} (v{})", filename, cf.header.header.version);
 
@@ -2012,7 +2016,8 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
                 cg.decrypt(cg_hmac);
 
             const auto cg_serialized = cg.serialize();
-            const std::string filename = cg.is_decrypted() ? "CG.bin" : "CG_enc.bin";
+            const std::string crypt_str = cg.is_decrypted() ? "dec" : "enc";
+            const std::string filename = fmt::format("cg_{}_{}.bin", cg.header.header.version, crypt_str);
             WriteFile(output_dir / filename, AsByteSpan(cg_serialized));
             Log::Info("Extracted 7BL/CG: {} (v{})", filename, cg.header.header.version);
         }
@@ -2021,31 +2026,41 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
     if (results.cf1) {
         auto cf_bytes = extract_region(results.cf1->offset, results.cf1->size);
         if (cf_bytes) {
-            auto cf = BootloaderCf::parse(*cf_bytes);
-            if (!bl_key_bytes.empty())
-                cf.decrypt(bl_key_bytes.data());
+            try {
+                auto cf = BootloaderCf::parse(*cf_bytes);
+                if (!bl_key_bytes.empty())
+                    cf.decrypt(bl_key_bytes.data());
 
-            const auto cf_serialized = cf.serialize();
-            const std::string filename = cf.is_decrypted() ? "CF_slot1.bin" : "CF_slot1_enc.bin";
-            WriteFile(output_dir / filename, AsByteSpan(cf_serialized));
-            Log::Info("Extracted 6BL/CF Slot 1: {} (v{})", filename, cf.header.header.version);
+                const auto cf_serialized = cf.serialize();
+                const std::string crypt_str = cf.is_decrypted() ? "dec" : "enc";
+                const std::string filename = fmt::format("cf_slot1_{}_{}.bin", cf.header.header.version, crypt_str);
+                WriteFile(output_dir / filename, AsByteSpan(cf_serialized));
+                Log::Info("Extracted 6BL/CF Slot 1: {} (v{})", filename, cf.header.header.version);
 
-            if (cf.is_decrypted())
-                std::memcpy(cg_hmac, cf.header.mac, 16);
+                if (cf.is_decrypted())
+                    std::memcpy(cg_hmac, cf.header.mac, 16);
+            } catch (const std::exception& ex) {
+                Log::Warn("Failed to parse CF Slot 1: {}", ex.what());
+            }
         }
     }
 
     if (results.cg1) {
         auto cg_bytes = extract_region(results.cg1->offset, results.cg1->size);
         if (cg_bytes) {
-            auto cg = BootloaderCg::parse(*cg_bytes);
-            if (cg_hmac[0] != 0)
-                cg.decrypt(cg_hmac);
+            try {
+                auto cg = BootloaderCg::parse(*cg_bytes);
+                if (cg_hmac[0] != 0)
+                    cg.decrypt(cg_hmac);
 
-            const auto cg_serialized = cg.serialize();
-            const std::string filename = cg.is_decrypted() ? "CG_slot1.bin" : "CG_slot1_enc.bin";
-            WriteFile(output_dir / filename, AsByteSpan(cg_serialized));
-            Log::Info("Extracted 7BL/CG Slot 1: {} (v{})", filename, cg.header.header.version);
+                const auto cg_serialized = cg.serialize();
+                const std::string crypt_str = cg.is_decrypted() ? "dec" : "enc";
+                const std::string filename = fmt::format("cg_slot1_{}_{}.bin", cg.header.header.version, crypt_str);
+                WriteFile(output_dir / filename, AsByteSpan(cg_serialized));
+                Log::Info("Extracted 7BL/CG Slot 1: {} (v{})", filename, cg.header.header.version);
+            } catch (const std::exception& ex) {
+                Log::Warn("Failed to parse CG Slot 1: {}", ex.what());
+            }
         }
     }
 
@@ -2053,14 +2068,22 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
     if (smc_bytes) {
         const auto smc_dec = smc_decrypt(*smc_bytes);
         WriteFile(output_dir / "smc_dec.bin", AsByteSpan(smc_dec));
-        WriteFile(output_dir / "smc_raw.bin", AsByteSpan(*smc_bytes));
-        Log::Info("Extracted SMC: smc_dec.bin / smc_raw.bin");
+        WriteFile(output_dir / "smc_enc.bin", AsByteSpan(*smc_bytes));
+        Log::Info("Extracted SMC: smc_dec.bin, smc_enc.bin");
+    }
+
+    if (results.smc_config_offset != 0 && results.smc_config_offset != 0xFFFFFFFF) {
+        auto smc_cfg_bytes = extract_region(results.smc_config_offset, 0x10000);
+        if (smc_cfg_bytes) {
+            WriteFile(output_dir / "smc_config.bin", AsByteSpan(*smc_cfg_bytes));
+            Log::Info("Extracted SMC Config: smc_config.bin");
+        }
     }
 
     auto kv_bytes = extract_region(results.kv_offset, results.kv_size);
     if (kv_bytes) {
-        WriteFile(output_dir / "kv_raw.bin", AsByteSpan(*kv_bytes));
-        Log::Info("Extracted Keyvault: kv_raw.bin");
+        WriteFile(output_dir / "kv_enc.bin", AsByteSpan(*kv_bytes));
+        Log::Info("Extracted Keyvault: kv_enc.bin");
         if (!cpu_key_bytes.empty()) {
             try {
                 const auto kv_dec = keyvault_decrypt(cpu_key_bytes, *kv_bytes);
@@ -2070,6 +2093,26 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
                 Log::Warn("Failed to decrypt KV: {}", e.what());
             }
         }
+    }
+
+    if (flash.filesystem) {
+        const auto fs_dir = output_dir / "fs";
+        std::filesystem::create_directories(fs_dir);
+        size_t count = 0;
+        for (const auto& entry : flash.filesystem->entries()) {
+            if (entry.filename[0] != '\0' && static_cast<uint8_t>(entry.filename[0]) != 0xFF &&
+                entry.filename[0] != '$' && entry.is_valid()) {
+                std::string fname{entry.filename};
+                auto data = flash.filesystem->get_file_data(entry);
+                if (data && !data->empty()) {
+                    WriteFile(fs_dir / fname, AsByteSpan(*data));
+                    count++;
+                } else {
+                    Log::Warn("Skipped unreadable FlashFS file '{}'", fname);
+                }
+            }
+        }
+        Log::Info("Extracted {} FlashFS file(s) to 'fs/'", count);
     }
 
     return true;

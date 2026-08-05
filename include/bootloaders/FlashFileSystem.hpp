@@ -30,8 +30,18 @@ namespace gxbuild3::bootloaders {
         uint32_t length{};                   // File length in bytes
         uint32_t timestamp{};                // File timestamp
 
-        /// @brief Check if entry is valid (has a block number and length)
-        bool is_valid() const noexcept { return block_number != 0 && length != 0; }
+        /// @brief Check if entry is valid and active (not deleted, valid filename, block number, length)
+        bool is_valid() const noexcept {
+            if (block_number == 0 || block_number == 0xFFFF) return false;
+            if (length == 0 || length == 0xFFFFFFFF) return false;
+            const uint8_t first = static_cast<uint8_t>(filename[0]);
+            if (first == '\0' || first == 0xFF || first == 0x05) return false; // 0x05 is deleted flag
+            for (size_t i = 0; i < kMaxFilenameLength && filename[i] != '\0'; ++i) {
+                const uint8_t c = static_cast<uint8_t>(filename[i]);
+                if (c < 0x20 || c > 0x7E) return false;
+            }
+            return true;
+        }
 
         /// @brief Check if filename matches (case-insensitive)
         bool filename_matches(std::string_view name) const noexcept {
