@@ -2278,35 +2278,28 @@ std::optional<std::vector<uint8_t>> build(const flash_image_t& image, BuildType 
 
                     // Update total CG size in CF header (0x10000 base + overflow size)
                     uint32_t total_cg_size = 0x10000 + static_cast<uint32_t>(data.size());
-                    auto& cf_bytes = *patchslot->cf;
-                    if (cf_bytes.size() >= sizeof(bl6_header)) {
-                        // Offset 0x1C in bl6_header is cg_size
-                        uint32_t cg_size_be = bswap32(total_cg_size);
-                        std::memcpy(cf_bytes.data() + 0x1C, &cg_size_be, sizeof(uint32_t));
+                    
+                    auto cf_obj = BootloaderCf::parse(*patchslot->cf);
+                    if (!cf_obj.is_decrypted()) {
+                        cf_obj.decrypt(key_1bl);
+                    }
 
-                        // If CF data payload contains decrypted metadata (starts at 0x30):
-                        // 0x30: uint16_t cg_blocks_used
-                        // 0x32: uint16_t cg_block_numbers[chain->size()]
-                        if (cf_bytes.size() >= 0x32 + (chain->size() * 2)) {
-                            uint16_t blocks_used_be = bswap16(static_cast<uint16_t>(chain->size()));
-                            std::memcpy(cf_bytes.data() + 0x30, &blocks_used_be, sizeof(uint16_t));
-                            for (size_t b_idx = 0; b_idx < chain->size(); ++b_idx) {
-                                uint16_t block_be = bswap16((*chain)[b_idx]);
-                                std::memcpy(cf_bytes.data() + 0x32 + (b_idx * 2), &block_be, sizeof(uint16_t));
-                            }
-                            Log::Info("Updated CF ({}) header with {} FlashFS block(s) for '{}' (total CG size 0x{:x})",
-                                      is_slot1 ? "slot 1" : "slot 0", chain->size(), filename, total_cg_size);
-                        }
+                    cf_obj.header.cg_size = bswap32(total_cg_size);
+                    cf_obj.header.cg_block_count = bswap16(static_cast<uint16_t>(chain->size()));
+                    for (size_t b_idx = 0; b_idx < chain->size() && b_idx < 223; ++b_idx) {
+                        cf_obj.header.cg_blocks[b_idx] = bswap16((*chain)[b_idx]);
+                    }
 
-                        // Re-write updated encrypted CF to NAND image driver
-                        if (patchslot_offset != 0) {
-                            auto cf_obj = BootloaderCf::parse(cf_bytes);
-                            if (cf_obj.is_decrypted()) {
-                                cf_obj.encrypt(key_1bl);
-                            }
-                            auto cf_enc = cf_obj.serialize();
-                            built.driver.write(patchslot_offset, cf_enc.data(), cf_enc.size());
-                        }
+                    Log::Info("Updated CF ({}) header with {} FlashFS block(s) for '{}' (total CG size 0x{:x})",
+                              is_slot1 ? "slot 1" : "slot 0", chain->size(), filename, total_cg_size);
+
+                    cf_obj.encrypt(key_1bl);
+                    auto cf_enc = cf_obj.serialize();
+                    *patchslot->cf = cf_enc;
+
+                    if (patchslot_offset != 0) {
+                        fs_driver->write(patchslot_offset, cf_enc.data(), cf_enc.size());
+                        built.driver.write(patchslot_offset, cf_enc.data(), cf_enc.size());
                     }
                 }
             }

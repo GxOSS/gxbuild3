@@ -930,7 +930,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
 
         // open nand, grab keyvault & smc
         if (!args.source_nand) {
-            static const std::vector<std::string> kDonorCandidates = {"nanddump.bin"};
+            static const std::vector<std::string> kDonorCandidates = {
+                "nanddump.bin", "nanddump1.bin", "nanddump2.bin", "nand.bin", "dump.bin"
+            };
             std::vector<std::filesystem::path> search_roots;
             if (args.fw_dir)
                 search_roots.push_back(*args.fw_dir);
