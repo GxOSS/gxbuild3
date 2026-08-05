@@ -1726,7 +1726,7 @@ nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
 
     // Handle patchslots
     if (results.patch_slots > 1 && results.cf0) {
-        uint32_t cf1_offset = results.cf0->offset + 0x10000;
+        uint32_t cf1_offset = results.cf0->offset + 0x20000;
         auto cf1_result = read_bl_header(driver, cf1_offset);
         if (cf1_result && get_bl_type(static_cast<uint16_t>(cf1_result->magic)) == CF) {
             results.cf1 = *cf1_result;
@@ -1734,6 +1734,19 @@ nand_results_t read(const gxbuild3::utils::FlashBlockDriver& driver) {
             auto cg1_result = read_bl_header(driver, cg1_offset);
             if (cg1_result && get_bl_type(static_cast<uint16_t>(cg1_result->magic)) == CG) {
                 results.cg1 = *cg1_result;
+            }
+        }
+    }
+
+    if (results.patch_slots > 2 && results.cf0) {
+        uint32_t cf2_offset = results.cf0->offset + 0x40000;
+        auto cf2_result = read_bl_header(driver, cf2_offset);
+        if (cf2_result && get_bl_type(static_cast<uint16_t>(cf2_result->magic)) == CF) {
+            results.cf2 = *cf2_result;
+            uint32_t cg2_offset = cf2_result->offset + cf2_result->size;
+            auto cg2_result = read_bl_header(driver, cg2_offset);
+            if (cg2_result && get_bl_type(static_cast<uint16_t>(cg2_result->magic)) == CG) {
+                results.cg2 = *cg2_result;
             }
         }
     }
@@ -1995,9 +2008,9 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
 
             const auto cf_serialized = cf.serialize();
             const std::string crypt_str = cf.is_decrypted() ? "dec" : "enc";
-            const std::string filename = fmt::format("cf_{}_{}.bin", cf.header.header.version, crypt_str);
+            const std::string filename = fmt::format("cf0_{}_{}.bin", cf.header.header.version, crypt_str);
             WriteFile(output_dir / filename, AsByteSpan(cf_serialized));
-            Log::Info("Extracted 6BL/CF: {} (v{})", filename, cf.header.header.version);
+            Log::Info("Extracted 6BL/CF Slot 0: {} (v{})", filename, cf.header.header.version);
 
             if (cf.is_decrypted())
                 cf_slot0 = cf;
@@ -2005,21 +2018,35 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
     }
 
     if (cf_slot0) {
-        std::memcpy(cg_hmac, cf_slot0->header.mac, 16);
+        std::memcpy(cg_hmac, cf_slot0->header.key, 16);
     }
 
     if (results.cg0) {
         auto cg_bytes = extract_region(results.cg0->offset, results.cg0->size);
         if (cg_bytes) {
+            if (flash.filesystem) {
+                const auto* sysupd_entry = flash.filesystem->find_file("sysupdate.xexp1");
+                if (!sysupd_entry)
+                    sysupd_entry = flash.filesystem->find_file("sysupdate.xexp");
+                if (sysupd_entry) {
+                    auto sysupd_data = flash.filesystem->get_file_data(*sysupd_entry);
+                    if (sysupd_data && !sysupd_data->empty()) {
+                        cg_bytes->insert(cg_bytes->end(), sysupd_data->begin(), sysupd_data->end());
+                        Log::Info("Rejoined CG0 with {} (total size: 0x{:x})", sysupd_entry->filename, cg_bytes->size());
+                    }
+                }
+            }
+
             auto cg = BootloaderCg::parse(*cg_bytes);
+            cg.header.header.size = static_cast<uint32_t>(cg_bytes->size());
             if (cg_hmac[0] != 0)
                 cg.decrypt(cg_hmac);
 
             const auto cg_serialized = cg.serialize();
             const std::string crypt_str = cg.is_decrypted() ? "dec" : "enc";
-            const std::string filename = fmt::format("cg_{}_{}.bin", cg.header.header.version, crypt_str);
+            const std::string filename = fmt::format("cg0_{}_{}.bin", cg.header.header.version, crypt_str);
             WriteFile(output_dir / filename, AsByteSpan(cg_serialized));
-            Log::Info("Extracted 7BL/CG: {} (v{})", filename, cg.header.header.version);
+            Log::Info("Extracted 7BL/CG Slot 0: {} (v{})", filename, cg.header.header.version);
         }
     }
 
@@ -2033,12 +2060,12 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
 
                 const auto cf_serialized = cf.serialize();
                 const std::string crypt_str = cf.is_decrypted() ? "dec" : "enc";
-                const std::string filename = fmt::format("cf_slot1_{}_{}.bin", cf.header.header.version, crypt_str);
+                const std::string filename = fmt::format("cf1_{}_{}.bin", cf.header.header.version, crypt_str);
                 WriteFile(output_dir / filename, AsByteSpan(cf_serialized));
                 Log::Info("Extracted 6BL/CF Slot 1: {} (v{})", filename, cf.header.header.version);
 
                 if (cf.is_decrypted())
-                    std::memcpy(cg_hmac, cf.header.mac, 16);
+                    std::memcpy(cg_hmac, cf.header.key, 16);
             } catch (const std::exception& ex) {
                 Log::Warn("Failed to parse CF Slot 1: {}", ex.what());
             }
@@ -2049,17 +2076,82 @@ bool extract_all(const flash_image_t& flash, const std::filesystem::path& output
         auto cg_bytes = extract_region(results.cg1->offset, results.cg1->size);
         if (cg_bytes) {
             try {
+                if (flash.filesystem) {
+                    const auto* sysupd_entry = flash.filesystem->find_file("sysupdate.xexp2");
+                    if (sysupd_entry) {
+                        auto sysupd_data = flash.filesystem->get_file_data(*sysupd_entry);
+                        if (sysupd_data && !sysupd_data->empty()) {
+                            cg_bytes->insert(cg_bytes->end(), sysupd_data->begin(), sysupd_data->end());
+                            Log::Info("Rejoined CG1 with {} (total size: 0x{:x})", sysupd_entry->filename, cg_bytes->size());
+                        }
+                    }
+                }
+
                 auto cg = BootloaderCg::parse(*cg_bytes);
+                cg.header.header.size = static_cast<uint32_t>(cg_bytes->size());
                 if (cg_hmac[0] != 0)
                     cg.decrypt(cg_hmac);
 
                 const auto cg_serialized = cg.serialize();
                 const std::string crypt_str = cg.is_decrypted() ? "dec" : "enc";
-                const std::string filename = fmt::format("cg_slot1_{}_{}.bin", cg.header.header.version, crypt_str);
+                const std::string filename = fmt::format("cg1_{}_{}.bin", cg.header.header.version, crypt_str);
                 WriteFile(output_dir / filename, AsByteSpan(cg_serialized));
                 Log::Info("Extracted 7BL/CG Slot 1: {} (v{})", filename, cg.header.header.version);
             } catch (const std::exception& ex) {
                 Log::Warn("Failed to parse CG Slot 1: {}", ex.what());
+            }
+        }
+    }
+
+    if (results.cf2) {
+        auto cf_bytes = extract_region(results.cf2->offset, results.cf2->size);
+        if (cf_bytes) {
+            try {
+                auto cf = BootloaderCf::parse(*cf_bytes);
+                if (!bl_key_bytes.empty())
+                    cf.decrypt(bl_key_bytes.data());
+
+                const auto cf_serialized = cf.serialize();
+                const std::string crypt_str = cf.is_decrypted() ? "dec" : "enc";
+                const std::string filename = fmt::format("cf2_{}_{}.bin", cf.header.header.version, crypt_str);
+                WriteFile(output_dir / filename, AsByteSpan(cf_serialized));
+                Log::Info("Extracted 6BL/CF Slot 2: {} (v{})", filename, cf.header.header.version);
+
+                if (cf.is_decrypted())
+                    std::memcpy(cg_hmac, cf.header.key, 16);
+            } catch (const std::exception& ex) {
+                Log::Warn("Failed to parse CF Slot 2: {}", ex.what());
+            }
+        }
+    }
+
+    if (results.cg2) {
+        auto cg_bytes = extract_region(results.cg2->offset, results.cg2->size);
+        if (cg_bytes) {
+            try {
+                if (flash.filesystem) {
+                    const auto* sysupd_entry = flash.filesystem->find_file("sysupdate.xexp3");
+                    if (sysupd_entry) {
+                        auto sysupd_data = flash.filesystem->get_file_data(*sysupd_entry);
+                        if (sysupd_data && !sysupd_data->empty()) {
+                            cg_bytes->insert(cg_bytes->end(), sysupd_data->begin(), sysupd_data->end());
+                            Log::Info("Rejoined CG2 with {} (total size: 0x{:x})", sysupd_entry->filename, cg_bytes->size());
+                        }
+                    }
+                }
+
+                auto cg = BootloaderCg::parse(*cg_bytes);
+                cg.header.header.size = static_cast<uint32_t>(cg_bytes->size());
+                if (cg_hmac[0] != 0)
+                    cg.decrypt(cg_hmac);
+
+                const auto cg_serialized = cg.serialize();
+                const std::string crypt_str = cg.is_decrypted() ? "dec" : "enc";
+                const std::string filename = fmt::format("cg2_{}_{}.bin", cg.header.header.version, crypt_str);
+                WriteFile(output_dir / filename, AsByteSpan(cg_serialized));
+                Log::Info("Extracted 7BL/CG Slot 2: {} (v{})", filename, cg.header.header.version);
+            } catch (const std::exception& ex) {
+                Log::Warn("Failed to parse CG Slot 2: {}", ex.what());
             }
         }
     }

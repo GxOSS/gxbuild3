@@ -77,11 +77,13 @@ typedef struct NandResults {
     std::optional<bl_results_t> sc;
     std::optional<bl_results_t> cd;
     std::optional<bl_results_t> ce;
-    // patchslot 0
+    // patchslots
     std::optional<bl_results_t> cf0;
     std::optional<bl_results_t> cg0;
     std::optional<bl_results_t> cf1;
     std::optional<bl_results_t> cg1;
+    std::optional<bl_results_t> cf2;
+    std::optional<bl_results_t> cg2;
     uint32_t kv_offset;
     uint32_t kv_size;
     uint32_t kv_version;

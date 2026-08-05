@@ -29,8 +29,10 @@ void BootloaderCg::decrypt(const uint8_t cg_hmac[16]) {
     uint32_t size_aligned = (header.header.size + 0xF) & ~0xF;
     size_t payload_len = size_aligned - sizeof(bl_header);
     
-    if (data.size() + sizeof(bl7_header) - sizeof(bl_header) < payload_len)
-        throw std::runtime_error("CG/7BL payload too short");
+    if (data.size() + sizeof(bl7_header) - sizeof(bl_header) < payload_len) {
+        size_t needed_data_size = payload_len - (sizeof(bl7_header) - sizeof(bl_header));
+        data.resize(needed_data_size, 0x00);
+    }
     
     uint8_t derived_key[16];
     ExCryptHmacSha(cg_hmac, 16, header.key, 16, nullptr, 0, nullptr, 0, derived_key, 16);
@@ -82,7 +84,7 @@ void BootloaderCg::encrypt(const uint8_t cg_hmac[16]) {
 }
 
 bool BootloaderCg::is_decrypted() const {
-    return decrypted || ((bswap32(header.original_size) & 0xFFF) == 0x000);
+    return decrypted || (header.original_size != 0 && (header.original_size & 0xFFF) == 0x000);
 }
 
 std::vector<uint8_t> BootloaderCg::serialize() const {
