@@ -184,6 +184,8 @@ namespace Ini {
             opt.noecdremap = b;
         else if (key == "smcnocheck")
             opt.smcnocheck = b;
+        else if (key == "noblpatch")
+            opt.noblpatch = b;
         else if (key == "xellbutton")
             opt.xellbutton = value;
         else if (key == "xellbutton2")

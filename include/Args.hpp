@@ -122,6 +122,7 @@ struct OptionsArgs {
     std::optional<bool> nosecurity;
     std::optional<bool> nosusecurity;
     std::optional<bool> smcnocheck;
+    std::optional<bool> noblpatch;
 
     // SMC config overrides
     std::optional<std::string> cputemp;

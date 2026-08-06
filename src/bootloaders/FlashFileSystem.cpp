@@ -42,8 +42,7 @@ namespace gxbuild3::bootloaders {
     }
 
     bool FlashFileSystem::create_defaults(uint16_t block_idx, uint32_t version,
-                                          uint32_t sys_update_addr,
-                                          bool reserve_config_blocks) {
+                                          uint32_t sys_update_addr, bool reserve_config_blocks) {
         if (!m_block_driver) {
             Log::Error("create_defaults: no block driver available");
             return false;
@@ -63,9 +62,8 @@ namespace gxbuild3::bootloaders {
         m_blockmap.assign(lil_block_count, 0x1ffe);
         m_blockmap[block_idx] = 0x1fff;
 
-        // Match RGBuild's CreateDefaults(): reserve everything up to the block after CG.
-        const uint32_t fs_start_block =
-            ceil_div_u32(sys_update_addr + 0x20000U, lil_block_length);
+        // reserve everything up to the block after CG.
+        const uint32_t fs_start_block = ceil_div_u32(sys_update_addr + 0x20000U, lil_block_length);
         for (uint32_t i = 0; i < std::min(fs_start_block, lil_block_count); ++i) {
             m_blockmap[i] = 0x1ffb;
         }
@@ -254,7 +252,7 @@ namespace gxbuild3::bootloaders {
 
         // Check if we have enough blocks
         if (chain_length == blocks_needed) {
-            // Perfect fit - write data to existing blocks
+            // write data to existing blocks
             for (uint32_t i = 0; i < blocks_needed && i < chain_length; i++) {
                 size_t to_write = lil_block_length;
                 if (i + 1 == blocks_needed) {
@@ -282,7 +280,7 @@ namespace gxbuild3::bootloaders {
                     Log::Error("set_chain_data: failed to allocate additional block");
                     return wrote;
                 }
-                // Link old tail → new block, then advance current to the new block
+                // Link old tail to new block, then advance current to the new block
                 if (current_blk < m_blockmap.size()) {
                     m_blockmap[current_blk] = alloc_result.block_index;
                 }
@@ -293,7 +291,7 @@ namespace gxbuild3::bootloaders {
             return set_chain_data(start_block, data);
         }
 
-        // Too many blocks - free excess and resize
+        // Too many blocks, free excess and resize
         if (chain_length > blocks_needed) {
             // Free blocks after the amount we need
             free_chain((*chain)[blocks_needed]);

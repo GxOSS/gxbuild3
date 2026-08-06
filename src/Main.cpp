@@ -1205,6 +1205,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)"
         auto apply_glitch_patch_section = [&](std::vector<uint8_t>& bytes,
                                               PatchSectionTarget target,
                                               std::string_view stage_name) -> bool {
+            const auto& opts = Options::Get();
+            if (opts.noblpatch.value_or(false)) {
+                Log::Info("Skipping {} bootloader patching (noblpatch option enabled)", stage_name);
+                return true;
+            }
             const auto* section = find_patch_section(target);
             if (!section) {
                 return true;

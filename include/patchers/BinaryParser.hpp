@@ -1,4 +1,5 @@
 #pragma once
+#include "Args.hpp"
 #include "Utils.hpp"
 
 #include <cstdint>
