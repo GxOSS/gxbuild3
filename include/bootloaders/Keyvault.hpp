@@ -182,8 +182,8 @@ class CXeKeyVault {
     [[nodiscard]] int Save(bool saveEncrypted);
     [[nodiscard]] int CalculateNonce(uint8_t* pbNonceBuff, uint32_t cbNonceBuff);
     CXeKeyVault() {
-        pbCPUKey = 0;
-        pbHmacShaNonce = 0;
+        pbCPUKey = nullptr;
+        pbHmacShaNonce = nullptr;
     };
 };
 
