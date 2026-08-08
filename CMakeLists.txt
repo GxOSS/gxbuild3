@@ -69,6 +69,9 @@ set_target_properties(gxbuild3 PROPERTIES
 target_link_libraries(gxbuild3 PRIVATE
     gxbuild3_lib
     CLI11::CLI11
+    stfs
+    GxCrypt
+    spdlog::spdlog
 )
 
 if(MSVC)
